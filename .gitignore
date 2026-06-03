@@ -3,3 +3,5 @@ dist/
 *.js.map
 chrome-profile/
 .env
+.claude/
+.vscode/
