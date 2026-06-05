@@ -1,30 +1,21 @@
 // src/index.ts
-import { chromium } from "patchright";
+import "dotenv/config";
+import {createPersistentContext, USER_DATA_DIR} from "./browser";
 import { runPortalGateway } from "./behavior";
-import { testPortalGateway } from "./test";
-import { clickScanButton } from "./testChecker";
 import { ProxyManager } from "./proxyManager";
 
-// TODO: .env 파일에서 프록시 파일 경로와 최대 재시도 횟수 설정 가능하도록 개선
-const MAX_RETRY = 5; // 최대 재시도 횟수
+// import { testPortalGateway } from "./test";
+// import { clickScanButton } from "./testChecker";
+
+const MAX_RETRY = parseInt(process.env.MAX_RETRY ?? "5", 10);
 
 // TODO: test 모듈과 실제 로직 모듈 분리하여 유지보수성 향상
-async function localTest() {
-  console.log("[VS Code] Playwright 로컬 검증 가동 시작...");
+async function main() {
+  console.log("[메인] 가동 시작...");
+  console.log(`[메인] 영구 프로필 경로: ${USER_DATA_DIR}`);
 
   const proxyManager = new ProxyManager();
   console.log(`[메인] 사용 가능한 프록시: ${proxyManager.count}개`);
-
-  const browser = await chromium.launch({
-    headless: false,
-    channel: "chrome",
-    args: [
-      "--start-maximized",
-      "--disable-blink-features=AutomationControlled",
-      "--remote-debugging-port=0",
-      "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-    ],
-  });
 
   let success = false;
   let proxy = proxyManager.getRandom();
@@ -38,25 +29,8 @@ async function localTest() {
 
       console.log(`[메인] 시도 ${attempt}/${MAX_RETRY} — 프록시: ${proxy.host}:${proxy.port}`);
 
-      const context = await browser.newContext({
-        proxy: proxyManager.toPlaywright(proxy),
-        viewport: null,
-        locale: "ko-KR",
-        timezoneId: "Asia/Seoul",
-      });
-      await context.addInitScript(() => {
-        Object.defineProperty(window, "outerWidth", { get: () => window.innerWidth });
-        Object.defineProperty(window, "outerHeight", { get: () => window.innerHeight });
-        const OrigRTC = window.RTCPeerConnection;
-        if (OrigRTC) {
-          (window as any).RTCPeerConnection = function (cfg: any) {
-            return new OrigRTC(cfg ? { ...cfg, iceServers: [] } : undefined);
-          };
-          (window as any).RTCPeerConnection.prototype = OrigRTC.prototype;
-          Object.assign((window as any).RTCPeerConnection, OrigRTC);
-        }
-      });
-      const page = await context.newPage();
+      const context = await createPersistentContext(proxy);
+      const page = context.pages()[0] ?? await context.newPage();
 
       try {
         const result = await runPortalGateway(page);
@@ -95,11 +69,9 @@ async function localTest() {
       console.error(`[메인] ${MAX_RETRY}회 시도 모두 실패. 종료합니다.`);
     }
   } finally {
-    console.log("[VS Code] 자원을 반환하고 브라우저를 종료합니다.");
-    await browser.close();
     proxyManager.destroy();
-    console.log("[VS Code] 테스트 종료.");
+    console.log("[메인] 종료.");
   }
 }
 
-localTest();
+main();
