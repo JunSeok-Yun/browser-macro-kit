@@ -46,14 +46,12 @@ async function runNaverGateway(page: Page) {
   const coupangLink = page
     .locator(
       [
-        'a:has-text("www.coupang.com")',
-        'a:has-text("coupang.com")',
-        '.link_tit:has-text("쿠팡")',
-        'a:has-text("쿠팡")',
-        'a:has-text("Coupang")',
+        'a.direct_link',
+        'a[href*="coupang.com"]:not([href*="ader.naver.com"])',
       ].join(", "),
     )
     .first();
+
   const elementCount = await coupangLink.count();
   console.log(`[Gateway] 매칭된 링크 요소 개수: ${elementCount}개`);
 
@@ -61,23 +59,16 @@ async function runNaverGateway(page: Page) {
     throw new Error("네이버 검색 결과에서 쿠팡으로 이동할 수 있는 링크를 찾지 못했습니다. 셀렉터 확인 필요.");
   }
 
-  const href = await coupangLink.getAttribute("href"); // 구현 완료시 삭제 예정
-  console.log("[Debug] 클릭할 링크 href:", href); // 구현 완료시 삭제 예정
+  const href = await coupangLink.getAttribute("href");
+  console.log("[Debug] 클릭할 링크 href:", href);
 
-  console.log("[Gateway] 링크 클릭 후 새 탭(쿠팡)이 열리는 것을 추적합니다...");
+  if (!href) throw new Error("링크 href를 찾을 수 없습니다.");
 
-  // 3. 클릭 및 새 탭 인스턴스 낚아채기
-  const [newTabPage] = await Promise.all([
-    page.context().waitForEvent("page"),
-    coupangLink.evaluate((el) => (el as HTMLElement).click()),
-  ]);
+  console.log("[Gateway] 쿠팡으로 이동합니다...");
+  await page.goto(href, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await sleep(4000);
 
-  // 4. 새로 열린 쿠팡 탭 로딩 대기
-  console.log("[Gateway] 새 탭 로딩을 대기합니다...");
-  await newTabPage.waitForLoadState("load");
-  await sleep(4000); // 쿠팡 메인화면 UI가 완전히 그려질 때까지 대기
-
-  return newTabPage;
+  return page;
 }
 
 /**
