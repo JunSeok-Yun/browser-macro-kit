@@ -37,6 +37,7 @@ proxies.txt - HaiIP 클라이언트 "IP 저장" 버튼으로 생성되는 프록
 - [x] 구글 경유 쿠팡 진입 성공 (같은 탭 이동, `waitForLoadState` 패턴 적용)
 - [x] 쿠팡 검색 엔드포인트 Access Denied → Patchright + Chrome 조합으로 해결
 - [x] WebRTC 리크 패치 (`iceServers: []` JS 패치 + 플래그 적용)
+- [x] VM 환경 구성 완료 (VS Code + 패키지 설치, 코드 정상 동작 확인)
 - [ ] `launchPersistentContext` + `userDataDir` 영구 프로필 전환
 - [ ] CreepJS로 지문/IP 신뢰 점수 검증
 
@@ -132,6 +133,12 @@ ProxyManager
   - toPlaywright()    { server: "http://IP:PORT" } 변환
   - fs.watch()        파일 변경 감지 → 자동 리로드 + 블랙리스트 초기화
 ```
+
+## 실행 환경
+
+- **로컬 개발**: Windows 11 + VS Code
+- **운영 환경**: VM (VS Code + 필요 패키지 설치 완료, 코드 정상 동작 확인)
+- VM에서 HaiIP OpenVPN 클라이언트 실행 후 proxies.txt 갱신 필요
 
 ## 실행 방법
 
