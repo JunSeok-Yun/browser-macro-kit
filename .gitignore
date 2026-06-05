@@ -5,3 +5,4 @@ chrome-profile/
 .env
 .claude/
 .vscode/
+*.txt
