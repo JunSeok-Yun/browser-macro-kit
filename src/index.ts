@@ -4,12 +4,9 @@ import {createPersistentContext, USER_DATA_DIR} from "./browser";
 import { runPortalGateway } from "./behavior";
 import { ProxyManager } from "./proxyManager";
 
-// import { testPortalGateway } from "./test";
-// import { clickScanButton } from "./testChecker";
 
 const MAX_RETRY = parseInt(process.env.MAX_RETRY ?? "5", 10);
 
-// TODO: test 모듈과 실제 로직 모듈 분리하여 유지보수성 향상
 async function main() {
   console.log("[메인] 가동 시작...");
   console.log(`[메인] 영구 프로필 경로: ${USER_DATA_DIR}`);
@@ -42,21 +39,6 @@ async function main() {
           console.warn(`[메인] 쿠팡 진입 실패. 프록시 ${proxy.host}:${proxy.port} 교체합니다.`);
           proxy = proxyManager.markFailed(proxy);
         }
-        // [페이즈 1]: 포털 경유 pixelscan 진입
-        // const targetPage = await testPortalGateway(page);
-        // if (targetPage) {
-        //   console.log("[메인] 게이트웨이 통과 확인. 스캔 버튼 클릭 작업을 시작합니다.");
-
-        //   // [페이즈 2]: pixelscan 검증 버튼 클릭
-        //   await clickScanButton(targetPage, 100000);
-
-        //   console.log("[메인] 모든 시퀀스가 성공적으로 수행되었습니다.");
-        //   success = true;
-        //   break; // 성공 시 루프 탈출
-        // } else {
-        //   console.warn(`[메인] 게이트웨이 진입 실패. 프록시 ${proxy.host}:${proxy.port} 교체합니다.`);
-        //   proxy = proxyManager.markFailed(proxy);
-        // }
       } catch (error) {
         console.error(`[메인] 시도 ${attempt} 중 에러 발생:`, error);
         proxy = proxyManager.markFailed(proxy!);
