@@ -1,51 +1,59 @@
 // src/index.ts
-import { chromium } from "playwright-extra";
-import stealthPlugin from "puppeteer-extra-plugin-stealth";
-// import { runPortalGateway } from "./behavior";
-import { testPortalGateway } from "./test";
-import { clickScanButton } from "./testChecker";
+import "dotenv/config";
+import {createPersistentContext, USER_DATA_DIR} from "./browser";
+import { runPortalGateway } from "./behavior";
+import { ProxyManager } from "./proxyManager";
 
-// 우회 플러그인 장착
-chromium.use(stealthPlugin());
 
-async function localTest() {
-  console.log("[VS Code] Playwright 로컬 검증 가동 시작...");
+const MAX_RETRY = parseInt(process.env.MAX_RETRY ?? "5", 10);
 
-  const browser = await chromium.launch({
-    headless: false, // 로컬 화면에 크롬 창 직접 노출
-    args: ["--disable-webrtc", "--start-maximized", "--disable-blink-features=AutomationControlled"],
-  });
+async function main() {
+  console.log("[메인] 가동 시작...");
+  console.log(`[메인] 영구 프로필 경로: ${USER_DATA_DIR}`);
 
-  const context = await browser.newContext({
-    viewport: null, // 창 최대화 레이아웃 동기화
-    locale: "ko-KR",
-    timezoneId: "Asia/Seoul",
-  });
+  const proxyManager = new ProxyManager();
+  console.log(`[메인] 사용 가능한 프록시: ${proxyManager.count}개`);
 
-  const page = await context.newPage();
+  let success = false;
+  let proxy = proxyManager.getRandom();
 
   try {
-    // [페이즈 1]: 포털(네이버/구글)을 랜덤 경유하여 픽셀스캔 사이트 진입
-    const targetPage = await testPortalGateway(page);
+    for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+      if (!proxy) {
+        console.error("[메인] 사용 가능한 프록시가 없습니다. 종료합니다.");
+        break;
+      }
 
-    if (targetPage) {
-      console.log("[메인] 게이트웨이 통과 확인. 픽셀스캔 내부 스캔 버튼 클릭 작업을 시작합니다.");
+      console.log(`[메인] 시도 ${attempt}/${MAX_RETRY} — 프록시: ${proxy.host}:${proxy.port}`);
 
-      // [페이즈 2]: 분리된 모듈을 호출하여 픽셀스캔 검증 버튼 클릭
-      await clickScanButton(targetPage, 10000); // 스캔 후 지문 화면 모니터링을 위해 10초 대기하도록 설정
+      const context = await createPersistentContext(proxy);
+      const page = context.pages()[0] ?? await context.newPage();
 
-      console.log("[메인] 모든 시퀀스가 성공적으로 수행되었습니다.");
-    } else {
-      console.log("[메인] 포털 경유 진입 실패 또는 타겟 도메인 이탈로 인해 다음 페이즈를 스킵합니다.");
+      try {
+        const result = await runPortalGateway(page);
+        if (result) {
+          console.log("[메인] 쿠팡 진입 성공!");
+          success = true;
+          break;
+        } else {
+          console.warn(`[메인] 쿠팡 진입 실패. 프록시 ${proxy.host}:${proxy.port} 교체합니다.`);
+          proxy = proxyManager.markFailed(proxy);
+        }
+      } catch (error) {
+        console.error(`[메인] 시도 ${attempt} 중 에러 발생:`, error);
+        proxy = proxyManager.markFailed(proxy!);
+      } finally {
+        await context.close(); // 재시도 시 컨텍스트 반드시 해제
+      }
     }
-  } catch (error) {
-    console.error("[메인] 가동 중 런타임 에러 발생:", error);
+
+    if (!success) {
+      console.error(`[메인] ${MAX_RETRY}회 시도 모두 실패. 종료합니다.`);
+    }
   } finally {
-    // 에러 여부와 상관없이 무조건 안전하게 크롬 프로세스 해제 및 종료
-    console.log("[VS Code] 자원을 반환하고 브라우저를 종료합니다.");
-    await browser.close();
-    console.log("[VS Code] 테스트 종료.");
+    proxyManager.destroy();
+    console.log("[메인] 종료.");
   }
 }
 
-localTest();
+main();

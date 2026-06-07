@@ -1,4 +1,4 @@
-import { Page } from "playwright";
+import { Page } from "patchright";
 import { typeLikeHuman } from "./behavior";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -172,9 +172,9 @@ export async function testPortalGateway(page: Page) {
     //   await testGoogleGateway(page);
     // }
 
-    // const targetPage = await testNaverGateway(page);
+    const targetPage = await testNaverGateway(page);
 
-    const targetPage = await testNaverToGoogleGateway(page);
+    // const targetPage = await testNaverToGoogleGateway(page);
 
     if (!targetPage) {
       console.log("[Fail] 최종 페이지가 확보되지 않았습니다.");

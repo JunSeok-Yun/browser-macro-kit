@@ -1,4 +1,4 @@
-import { Page } from "playwright";
+import { Page } from "patchright";
 
 export async function clickScanButton(page: Page, waitTimeMs: number = 8000): Promise<void> {
   console.log("[Checker] 픽셀스캔 페이지 내부 조작을 시작합니다.");

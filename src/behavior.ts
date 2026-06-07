@@ -1,4 +1,4 @@
-import { Page } from "playwright";
+import { Page } from "patchright";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -35,14 +35,23 @@ async function runNaverGateway(page: Page) {
   await page.waitForLoadState("domcontentloaded");
   await sleep(3000);
 
+  console.log("[Debug] 현재 URL:", page.url()); // 구현 완료시 삭제 예정
+  console.log("[Debug] 페이지 타이틀:", await page.title()); // 구현 완료시 삭제 예정
+
   console.log("[Gateway] 네이버 검색 결과에서 실제 이동 가능한 링크 요소를 탐색합니다.");
 
   // 2. 검색 결과 화면에서 쿠팡 공식 사이트 링크 클릭
   // 네이버 검색 결과 내 웹사이트 링크나 브랜드검색 영역 셀렉터 타겟팅
   // (안전하게 쿠팡 텍스트가 포함된 링크 요소를 찾아 곡선 효과 대용으로 자연스럽게 클릭)
   const coupangLink = page
-    .locator(['a:has-text("쿠팡")', 'a:has-text("Coupang")', '.link_site:has-text("쿠팡")'].join(", "))
+    .locator(
+      [
+        'a.direct_link',
+        'a[href*="coupang.com"]:not([href*="ader.naver.com"])',
+      ].join(", "),
+    )
     .first();
+
   const elementCount = await coupangLink.count();
   console.log(`[Gateway] 매칭된 링크 요소 개수: ${elementCount}개`);
 
@@ -50,19 +59,16 @@ async function runNaverGateway(page: Page) {
     throw new Error("네이버 검색 결과에서 쿠팡으로 이동할 수 있는 링크를 찾지 못했습니다. 셀렉터 확인 필요.");
   }
 
-  console.log("[Gateway] 링크 클릭 후 새 탭(쿠팡)이 열리는 것을 추적합니다...");
+  const href = await coupangLink.getAttribute("href");
+  console.log("[Debug] 클릭할 링크 href:", href);
 
-  // 3. 클릭 및 새 탭 인스턴스 낚아채기
-  const newTabPromise = page.context().waitForEvent("page");
-  await coupangLink.click();
-  const newTabPage = await Promise.race([newTabPromise, page.waitForURL("**/coupang.com/**").then(() => page)]);
+  if (!href) throw new Error("링크 href를 찾을 수 없습니다.");
 
-  // 4. 새로 열린 쿠팡 탭 로딩 대기
-  console.log("[Gateway] 새 탭 로딩을 대기합니다...");
-  await newTabPage.waitForLoadState("load");
-  await sleep(4000); // 쿠팡 메인화면 UI가 완전히 그려질 때까지 대기
+  console.log("[Gateway] 쿠팡으로 이동합니다...");
+  await page.goto(href, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await sleep(4000);
 
-  return newTabPage;
+  return page;
 }
 
 /**
@@ -94,7 +100,7 @@ async function runGoogleGateway(page: Page): Promise<Page> {
       [
         'a:has-text("쿠팡")',
         'a:has-text("coupang.com")',
-        'a h3:has-text("쿠팡")', // 구글 표준 검색 결과 타이틀 태그(h3) 조준
+        'a:has(h3:has-text("쿠팡"))', // 구글 표준 검색 결과 타이틀 태그(h3) 조준
       ].join(", "),
     )
     .first();
@@ -107,21 +113,21 @@ async function runGoogleGateway(page: Page): Promise<Page> {
     throw new Error("구글 검색 결과에서 쿠팡으로 이동할 수 있는 링크를 찾지 못했습니다. 셀렉터 확인 필요.");
   }
 
+  const href = await googleResultLink.getAttribute("href");
+  console.log("[Debug] 클릭할 링크 href:", href);
+
   console.log("[Gateway] 링크 클릭 후 새 탭(쿠팡)이 열리는 것을 추적합니다...");
 
   // 3. 클릭 및 새 탭 인스턴스 가로채기
   // 구글은 계정 세션이나 설정에 따라 현재 탭에서 이동할 수도 있고, 새 탭(_blank)으로 열릴 수도 있으므로 안전하게 대기
-  const newTabPromise = page.context().waitForEvent("page");
-  await googleResultLink.click();
-
-  const newTabPage = await Promise.race([
-    newTabPromise,
-    page.waitForURL("**/coupang.com/**").then(() => page), // behavior.ts
-    // test.ts는 coupang.com 대신 pixelscan.net 으로 변경
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded", { timeout: 15000 }),
+    googleResultLink.evaluate((el) => (el as HTMLElement).click()),
   ]);
+  const newTabPage = page;
 
   // 4. 새로 열린 쿠팡 탭 로딩 대기
-  console.log("[Gateway] 새 탭(쿠팡) 로딩을 대기합니다...");
+  console.log("[Gateway] 기존 탭(쿠팡) 로딩을 대기합니다...");
   await newTabPage.waitForLoadState("load");
   await sleep(4000); // 쿠팡 메인화면 UI가 완전히 그려질 때까지 대기
 
@@ -137,7 +143,6 @@ export async function runPortalGateway(page: Page) {
 
   try {
     const targetPage = isNaver ? await runNaverGateway(page) : await runGoogleGateway(page);
-    await targetPage.waitForLoadState("load");
     await sleep(3000);
 
     // 최종 검증: 쿠팡에 잘 도달했는지 URL 검사
