@@ -1,4 +1,4 @@
-import { Page } from "patchright";
+import { Page, Locator } from "patchright";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -16,6 +16,58 @@ export async function typeLikeHuman(page: Page, selector: string, text: string) 
     await sleep(Math.random() * 150 + 80); // 글자당 80ms~230ms 사이 딜레이
   }
   await sleep(500);
+}
+
+/** 3차 베지어 곡선 위의 한 점 좌표 계산 (t: 0~1 진행률) */
+function bezierPoint(t: number, p0: number, p1: number, p2: number, p3: number) {
+  const u = 1 - t;
+  return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+}
+
+/** 현재 위치에서 대상 요소까지 베지어 곡선 궤적으로 이동 후 클릭 */
+async function moveMouseAlongCurveAndClick(page: Page, locator: Locator) {
+  await locator.scrollIntoViewIfNeeded();
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("요소의 위치 정보를 가져올 수 없음 (보이지 않는 요소일 가능성)");
+
+  const targetX = box.x + box.width / 2;
+  const targetY = box.y + box.height / 2;
+
+  // Patchright는 현재 커서 좌표를 노출하지 않으므로 임의의 시작점에서 출발
+  const startX = Math.random() * 300 + 50;
+  const startY = Math.random() * 300 + 50;
+
+  // 제어점 2개를 매번 무작위로 흔들어 곡선 모양을 다르게 생성
+  const cp1x = startX + (targetX - startX) * (0.3 + Math.random() * 0.2);
+  const cp1y = startY + (targetY - startY) * (Math.random() * 0.4);
+  const cp2x = startX + (targetX - startX) * (0.6 + Math.random() * 0.2);
+  const cp2y = targetY - (targetY - startY) * (Math.random() * 0.4);
+
+  const steps = 30;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = bezierPoint(t, startX, cp1x, cp2x, targetX);
+    const y = bezierPoint(t, startY, cp1y, cp2y, targetY);
+    await page.mouse.move(x, y);
+    await sleep(Math.random() * 15 + 8);
+  }
+
+  await sleep(Math.random() * 200 + 150);
+  await page.mouse.down();
+  await sleep(Math.random() * 80 + 40);
+  await page.mouse.up();
+}
+
+/** 페이지에서 랜덤한 횟수/방향/거리로 스크롤하며 자연스럽게 체류 */
+async function randomScrollDwell(page: Page) {
+  const scrollCount = Math.floor(Math.random() * 4) + 2; // 2~5회
+
+  for (let i = 0; i < scrollCount; i++) {
+    const distance = Math.floor(Math.random() * 400) + 200; // 200~600px
+    const goingUp = i > 0 && Math.random() < 0.15;          // 가끔 위로 스크롤
+    await page.mouse.wheel(0, goingUp ? -distance : distance);
+    await sleep(Math.random() * 1500 + 1000); // 1 ~ 2.5초 체류
+  }
 }
 
 /**
@@ -47,7 +99,7 @@ async function runNaverGateway(page: Page) {
     .locator(
       [
         'a.direct_link',
-        'a[href*="coupang.com"]:not([href*="ader.naver.com"])',
+        'a[href*="coupang.com"]:not([href*="ader.naver.com"]):not([href*="link.coupang.com"])',
       ].join(", "),
     )
     .first();
@@ -73,8 +125,6 @@ async function runNaverGateway(page: Page) {
 
 /**
  * 구글을 경유하여 쿠팡으로 진입하는 로직
- * TODO: 가정용 프록시 연동하고 난 다음 다시 해당 로직 검증 필요 => 현재는 봇 탐지에 걸림
- * Playwright의 browser.newContext()를 실행하면, 쿠키와 캐시가 단 1바이트도 존재하지 않는 "태초의 순수한 브라우저" 상태로 열리기 때문
  */
 async function runGoogleGateway(page: Page): Promise<Page> {
   console.log("[Gateway] 구글을 통해 쿠팡 진입을 시도합니다.");
@@ -134,6 +184,86 @@ async function runGoogleGateway(page: Page): Promise<Page> {
   return newTabPage;
 }
 
+/** 찾아 들어갈 특정 상품 정보 (판매처/브랜드 + 상품 종류). 어떤 상품이든 이 형태로 지정 */
+interface ProductTarget {
+  brand: string;       // 판매처/브랜드명 (예: "LG전자")
+  keyword: string;     // 상품 종류/특징 키워드 (예: "노트북")
+  productId?: string;  // 장기 추적용 정밀 식별자 (/vp/products/{이 숫자})
+}
+
+/** 상품종류 / 브랜드 / 조합 중 하나를 무작위로 골라 검색어로 사용 (검색 패턴 다양화) */
+function buildSearchQuery(target: ProductTarget): string {
+  const candidates = [
+    target.keyword,
+    target.brand,
+    `${target.brand} ${target.keyword}`,
+  ];
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+/** 상품 링크 href에서 productId(/vp/products/ 뒤 숫자)를 추출 */
+function extractProductId(href: string): string | null {
+  const match = href.match(/\/vp\/products\/(\d+)/);
+  return match ? match[1] : null;
+}
+/** productId 정밀 매칭을 1순위로, 실패 시 브랜드+키워드 fuzzy 매칭으로 폴백 */
+async function findTargetProduct(page: Page, target: ProductTarget): Promise<Locator | null> {
+const productLinks = page.locator('a[href*="/vp/products/"]').filter({ hasNotText: "광고" });
+
+  // 1순위: productId로 정밀 매칭 — vendorItemId(=data-id)와 달리 장기적으로 안정적인 식별자
+  if (target.productId) {
+    const hrefs = await productLinks.evaluateAll((els) =>
+      els.map((el) => (el as HTMLAnchorElement).getAttribute("href") ?? "")
+    );
+    const exactIndex = hrefs.findIndex((href) => extractProductId(href) === target.productId);
+    if (exactIndex !== -1) return productLinks.nth(exactIndex);
+  }
+
+  // 2순위: 브랜드+키워드 fuzzy 매칭 (productId가 없거나, 결과 페이지에 없을 때 폴백)
+  const texts = await productLinks.allInnerTexts();
+  const fuzzyIndex = texts.findIndex((raw) => {
+    const text = raw.replace(/\s+/g, " ");
+    return text.includes(target.brand) && text.includes(target.keyword);
+  });
+
+  return fuzzyIndex === -1 ? null : productLinks.nth(fuzzyIndex);
+}
+
+
+/**
+ * 쿠팡 메인 진입 후 검색 → 상품 클릭까지 이어지는 행동 시퀀스
+ */
+async function runCoupangSearchFlow(page: Page, target: ProductTarget) {
+  const query = buildSearchQuery(target);
+  console.log(`[Behavior] 쿠팡 검색을 시작합니다: "${query}" (타겟: ${target.brand} ${target.keyword})`);
+
+  // 검색창: name="q"인 input이 데스크탑/태블릿 두 form에 중복 존재 → :visible로 보이는 것만 타겟팅
+  await typeLikeHuman(page, 'input[name="q"]:visible', query);
+  await page.keyboard.press("Enter");
+
+  await page.waitForLoadState("domcontentloaded");
+  await sleep(3000);
+
+  await randomScrollDwell(page);   // ← 검색 결과 페이지 둘러보기
+  console.log(`[Behavior] 검색 결과에서 타겟 상품(${target.brand} / ${target.keyword})을 탐색합니다.`);
+
+  const productLink = await findTargetProduct(page, target);
+  if (!productLink) {
+    throw new Error(`검색 결과에서 타겟 상품(${target.brand} ${target.keyword})을 찾지 못했습니다.`);
+  }
+
+  console.log("[Behavior] 상품 페이지로 이동합니다.");
+// 상품 링크는 target="_blank" → 클릭 시 새 탭(Page)이 열림. 클릭과 동시에 새 탭 이벤트를 캡처해야 함
+  const [productPage] = await Promise.all([
+    page.context().waitForEvent("page"),
+    moveMouseAlongCurveAndClick(page, productLink),
+  ]);
+
+  await productPage.waitForLoadState("domcontentloaded");
+  await sleep(4000);
+  await randomScrollDwell(productPage);   // ← 새로 열린 상품 탭에서 스크롤
+}
+
 /**
  * 외부(index.ts)에서 호출할 메인 게이트웨이 통합 함수
  */
@@ -149,6 +279,7 @@ export async function runPortalGateway(page: Page) {
     const currentUrl = targetPage.url();
     if (currentUrl.includes("coupang.com")) {
       console.log(`[Success] 쿠팡 진입 성공! 현재 URL: ${currentUrl}`);
+      await runCoupangSearchFlow(targetPage, { brand: "도드람", keyword: "한돈", productId: "188172341" });
       return true;
     } else {
       console.log(`[Fail] 다른 페이지로 이탈됨: ${currentUrl}`);
