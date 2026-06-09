@@ -1,6 +1,5 @@
-import "dotenv/config";
+import { ENV } from "../config/env";
 import * as fs from "fs";
-import * as path from "path";
 
 export interface ProxyEntry {
   host: string;
@@ -14,7 +13,7 @@ export class ProxyManager {
   private watcher: fs.FSWatcher | null = null;
   private reloadTimer: NodeJS.Timeout | null = null;
 
-constructor(filePath: string = path.resolve(process.cwd(), process.env.PROXY_FILE_PATH ?? "proxies.txt")) {
+constructor(filePath: string = ENV.PROXY_FILE_PATH) {
     this.filePath = filePath;
     this.reload();
     this.watchFile();
