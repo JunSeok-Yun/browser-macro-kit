@@ -1,5 +1,5 @@
 import { Page } from "patchright";
-import { typeLikeHuman } from "./behavior";
+import { typeLikeHuman } from "../automation/keyboard";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

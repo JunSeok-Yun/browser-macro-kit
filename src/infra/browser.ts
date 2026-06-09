@@ -1,16 +1,10 @@
-import "dotenv/config";
-import * as path from "path";
+import { ENV } from "../config/env";
 import { chromium, BrowserContext } from "patchright";
-import { ProxyEntry } from "./proxyManager";
-
-export const USER_DATA_DIR = path.resolve(
-  process.cwd(),
-  process.env.USER_DATA_DIR ?? "user-data"
-);
+import { ProxyEntry } from "../infra/proxyManager";
 
 export async function createPersistentContext(proxy: ProxyEntry): Promise<BrowserContext> {
-  const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
-    headless: process.env.HEADLESS === "true",
+  const context = await chromium.launchPersistentContext(ENV.USER_DATA_DIR, {
+    headless: ENV.HEADLESS,
     channel: "chrome",
     proxy: { server: `http://${proxy.host}:${proxy.port}` },
     viewport: null,
