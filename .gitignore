@@ -6,4 +6,4 @@ chrome-profile/
 .claude/
 .vscode/
 *.txt
-user-data/
+user-data*/

@@ -1,16 +1,16 @@
-import "dotenv/config";
-import { createPersistentContext, USER_DATA_DIR } from "./browser";
-import { checkCreepJSTrust } from "./creepjs";
-import { testPortalGateway } from "./test";
-import { clickScanButton } from "./testChecker";
-import { ProxyManager } from "./proxyManager";
+import { ENV } from "./config/env";
+import { createPersistentContext} from "./infra/browser";
+import { checkCreepJSTrust } from "./test/creepjs";
+import { testPortalGateway } from "./test/pixelscan";
+import { clickScanButton } from "./test/checker";
+import { ProxyManager } from "./infra/proxyManager";
 
 // 실행 시 인자로 테스트 대상 선택: creepjs(기본값) | pixelscan
 const TARGET = process.argv[2] ?? "creepjs";
 
 async function main() {
   console.log(`[진단] ${TARGET} 검증 시작...`);
-  console.log(`[진단] 영구 프로필 경로: ${USER_DATA_DIR}`);
+  console.log(`[진단] 영구 프로필 경로: ${ENV.USER_DATA_DIR}`);
 
   const proxyManager = new ProxyManager();
   const proxy = proxyManager.getRandom();
