@@ -86,7 +86,7 @@ creepjs-result.txt - runDiagnostics 실행 시 생성 (gitignore 처리)
 - [x] `buildSearchQuery` exclude 인자 — 실패 쿼리 제외, 소진 시 `null` 반환
 - [x] `ProductNotFoundError` — `usedQueries` / `exhausted` 필드로 index.ts에 상태 전달
 - [x] `index.ts` `usedQueries` 세션 간 누적 — 차단 실패 시에는 추가하지 않음
-- [x] `[Debug]` 로그 정리 — `runNaverGateway` 완료. `runCoupangSearchFlow` 1개 잔존 (`flow.ts:57`)
+- [x] `[Debug]` 로그 정리 — `runNaverGateway`, `runCoupangSearchFlow` 모두 제거 완료
 - [ ] VM(운영 환경)에서 반복 실행 안정성 검증
 
 ### 2.5단계 - 코드 구조 리팩토링 (완료, 2026-06-09)
@@ -99,6 +99,29 @@ creepjs-result.txt - runDiagnostics 실행 시 생성 (gitignore 처리)
 - [x] 진단 파일 → `test/` 레이어로 이동 및 이름 정리 (`test.ts` → `pixelscan.ts`)
 - [x] `runPortalGateway` 시그니처 변경 — `ProductTarget` 파라미터 추가
 - [x] `utils.ts` 추가 — `sleep` 공통 유틸리티
+
+### 2.6단계 - 다중 상품 / 키워드-상품 바인딩 구조 개편 (완료, 2026-06-10)
+
+- [x] `ProductItem.exactName: string` → `exactNames: string[]` — 옵션 변형(1개/2개/3개 등) 전체 등록
+- [x] `keywords` 위치 이동 — `ProductTarget.keywords`(공유) → `ProductItem.keywords`(상품별 전용)
+- [x] `DEFAULT_TARGET`에 다중 상품 등록 — 보쌈(9288498572) + 등갈비(9052369498), 상품별 전용 키워드셋
+- [x] `buildSearchQuery` 개편 — `{ query, product }` 반환. 키워드를 상품과 1:1 페어링해 "어떤 키워드로 검색했는가"가 곧 "어떤 상품을 찾아야 하는가"를 결정
+- [x] 검색어 후보를 `브랜드 + 키워드` 형태로 통일 — 브랜드 없는 키워드 단독 후보 제거 (brand 단독 후보는 예외적으로 모든 상품에 연결)
+- [x] `findTargetProduct` 개편 — 단일 `ProductItem` 인자로 변경. `exactNames`를 랜덤 셔플 후 하나씩 ① productId+name 매칭 → ② name 단독 매칭 시도, 첫 매칭에서 즉시 반환
+- [x] `[Debug]` 로그 완전 제거 (`flow.ts`)
+
+```typescript
+// core/types.ts
+interface ProductItem {
+  productId: string;
+  exactNames: string[];   // 옵션 변형 전체 (1개/2개/3개...)
+  keywords: string[];     // 이 상품 전용 검색어
+}
+interface ProductTarget {
+  brand: string;
+  products: ProductItem[];
+}
+```
 
 ### 3단계 - 메인 루프 및 예외 처리 (설계 확정, 구현 예정)
 
@@ -151,6 +174,10 @@ CREATE TABLE query_stats (
 ```
 
 `query_stats` 도입 후 `buildSearchQuery`는 `fail_count` 낮은 순 가중치 선택으로 교체 예정.
+
+### 4단계 - 운영 환경 검증 (예정)
+
+- [ ] VM(운영 환경)에서 반복 실행 안정성 검증
 
 ## 테스트 결과 및 현황 (2026-06-09 기준)
 
@@ -213,8 +240,8 @@ CREATE TABLE query_stats (
 - **구글 링크 클릭**: 같은 탭에서 이동 → `waitForLoadState` + `Promise.all` 패턴
 - **네이버 검색 후 대기**: `sleep(NAVER_SEARCH_DELAY=3000)` 필수. 1초로 줄이면 봇 감지 발생
 - **WebRTC 패치**: `iceServers: []`로 STUN 차단. `RTCPeerConnection` 자체는 유지해 Akamai API 완전성 체크 통과
-- **`ProductTarget` 구조**: `brand: string` + `keywords: string[]` + `products: ProductItem[]`. `buildSearchQuery` 후보: brand 1개 + keywords N개 + brand+keyword 조합 N개 = 최대 2N+1개. 실패한 쿼리는 `exclude` Set으로 제외하고 모두 소진 시 `null` 반환
-- **`findTargetProduct` 매칭 전략**: `products` 배열을 셔플 후 순회. 항목별 ① productId 후보군 → exactName 정밀 매칭 → ② exactName 단독(productId 변경 복구). fuzzy 폴백 없음
+- **`ProductTarget` 구조 (2026-06-10 개편)**: `brand: string` + `products: ProductItem[]`. 각 `ProductItem`은 `productId` + `exactNames: string[]`(옵션 변형 전체) + `keywords: string[]`(상품 전용 검색어)를 가짐. `buildSearchQuery`는 상품별 `브랜드+키워드` 후보를 만들어 `{ query, product }` 쌍으로 풀에 모은 뒤 랜덤 선택 — 키워드와 상품이 항상 1:1로 묶여 있어 "한돈"(등갈비 키워드)으로 보쌈 상품을 찾는 식의 교차 매칭이 발생하지 않음. brand 단독 검색만 예외적으로 모든 상품에 연결됨. 실패한 쿼리는 `exclude` Set으로 제외하고 모두 소진 시 `null` 반환
+- **`findTargetProduct` 매칭 전략 (2026-06-10 개편)**: `buildSearchQuery`가 결정한 단일 `ProductItem`만 탐색. `exactNames`(옵션 변형 목록)를 랜덤 셔플 후 하나씩 ① productId 후보군 → exactName 매칭 → ② exactName 단독 매칭(productId 변경 복구) 시도, 첫 매칭에서 즉시 반환 — 매 실행마다 다른 옵션으로 진입. fuzzy 폴백 없음
 - **`ProductNotFoundError`**: `usedQueries: Set<string>` + `exhausted: boolean` 필드. index.ts가 쿼리 누적 및 종료 여부 판단. 차단 오류와 명확히 구분
 - **프록시 블랙리스트 조건**: 타겟 상품 미발견은 프록시 잘못 아님 → 블랙리스트 추가 안 함. 추가 조건: PROXY_ERROR / AKAMAI_BLOCK. RET9999는 프로필 교체로 대응
 - **Akamai 차단 메커니즘**: ① 프록시 IP 평판, ② `_abck` 쿠키(세션 쿠키 기반) 복합 추적. 프록시 교체만으로 부족하고 프로필도 교체해야 `_abck` 오염 상태 리셋
@@ -297,12 +324,7 @@ npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
 
 ## 다음 작업
 
-> 2.5단계(리팩토링) 완료. 3단계 진입 준비 완료 (2026-06-09).
-
-### 잔여 정리
-
-- **`[Debug]` 로그 1개 잔존** — `coupang/flow.ts:57` 선택 상품 로그 제거
-- **VM 반복 실행 안정성 검증**
+> 2.6단계(다중 상품 / 키워드-상품 바인딩 구조 개편) 완료. 3단계 진입 준비 완료 (2026-06-10).
 
 ### 3단계 구현 (우선순위 순)
 
@@ -314,4 +336,4 @@ npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
 ### 이후
 
 - **`runGoogleGateway` 재검증** — 현재 봇 탐지에 걸리는 상태
-- **VM 반복 실행 안정성 검증**
+- **4단계**: VM 반복 실행 안정성 검증
