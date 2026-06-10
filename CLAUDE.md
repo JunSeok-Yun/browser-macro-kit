@@ -1,4 +1,4 @@
-Playwright 기반 브라우저 자동화 프로젝트. 포털 사이트(네이버/구글)를 경유하여 타겟 사이트에 자연스럽게 진입하는 것을 목표로 하며, Akamai 봇 탐지 우회를 검증 중이다.
+Patchright 기반 브라우저 자동화 프로젝트. 포털 사이트(네이버/구글)를 경유하여 타겟 사이트에 자연스럽게 진입하는 것을 목표로 하며, Akamai 봇 탐지 우회를 검증 중이다.
 
 ## 기술 스택
 
@@ -21,11 +21,13 @@ src/
 
   core/
     types.ts            - 공유 인터페이스 (ProductItem, ProductTarget)
-    errors.ts           - 커스텀 에러 (ProductNotFoundError)
+    errors.ts           - 커스텀 에러 (ProductNotFoundError, BlockDetectedError, BlockType)
+    blockDetection.ts   - 차단 감지 (assertNotBlocked) — SELECTOR_BUG/AKAMAI_BLOCK/COUPANG_APP_BLOCK/AKAMAI_CHALLENGE
 
   infra/
-    browser.ts          - 영구 브라우저 컨텍스트 팩토리 (createPersistentContext)
-    proxyManager.ts     - HaiIP 유동IP 연동 모듈 (ProxyManager)
+    browser.ts          - 영구 브라우저 컨텍스트 팩토리 (createPersistentContext(proxy, profileDir))
+    proxyManager.ts     - HaiIP 유동IP 연동 모듈 (ProxyManager, 인메모리+DB 이중 블랙리스트)
+    db.ts               - SQLite 연동 (better-sqlite3) — block_log/proxy_stats/query_stats
 
   automation/
     keyboard.ts         - 인간형 타이핑 (typeLikeHuman, clearSearchInput)
@@ -49,6 +51,7 @@ src/
 .env              - 환경변수 (하단 참조)
 proxies.txt       - HaiIP "IP 저장" 버튼으로 생성되는 프록시 목록 (IP:PORT, 약 2000개)
 creepjs-result.txt - runDiagnostics 실행 시 생성 (gitignore 처리)
+data/macro.db     - SQLite DB (block_log/proxy_stats/query_stats, gitignore 처리)
 ```
 
 ## 단계별 진행 현황
@@ -87,7 +90,6 @@ creepjs-result.txt - runDiagnostics 실행 시 생성 (gitignore 처리)
 - [x] `ProductNotFoundError` — `usedQueries` / `exhausted` 필드로 index.ts에 상태 전달
 - [x] `index.ts` `usedQueries` 세션 간 누적 — 차단 실패 시에는 추가하지 않음
 - [x] `[Debug]` 로그 정리 — `runNaverGateway`, `runCoupangSearchFlow` 모두 제거 완료
-- [ ] VM(운영 환경)에서 반복 실행 안정성 검증
 
 ### 2.5단계 - 코드 구조 리팩토링 (완료, 2026-06-09)
 
@@ -123,32 +125,40 @@ interface ProductTarget {
 }
 ```
 
-### 3단계 - 메인 루프 및 예외 처리 (설계 확정, 구현 예정)
+### 3단계 - 메인 루프 및 예외 처리 (1차 구현 완료, 2026-06-10 — 일부 보완 필요)
 
 #### 차단 유형 분류 및 복구 전략
 
 | 유형 | 감지 방법 | 프록시 교체 | 프로필 교체 | 재시도 |
 |---|---|---|---|---|
-| `SELECTOR_BUG` | URL에 `link.coupang.com` 포함 | ❌ | ❌ | ❌ (코드 버그) |
+| `SELECTOR_BUG` | URL에 `link.coupang.com` 포함 | ❌ | ❌ | ❌ (코드 버그, `index.ts`에서 `return`으로 즉시 종료) |
 | `AKAMAI_BLOCK` | `Reference #18.` 패턴 / "Access Denied" HTML | ✅ | ✅ | ✅ |
 | `COUPANG_APP_BLOCK` | JSON `rCode: "RET9999"` | ✅ | ✅ | ✅ |
 | `AKAMAI_CHALLENGE` | iframe/challenge 요소 존재 | ✅ | ✅ | ✅ + 대기 |
 | `PROXY_ERROR` | timeout / ERR_TUNNEL 등 | ✅ | ❌ | ✅ |
 | `HTTP_ERROR` | 5xx 상태코드 | ✅ (N회 후) | ❌ | ✅ |
 
-#### 구현 계획
+#### 구현 완료
 
-- [ ] `BlockDetectedError` 클래스 (`core/errors.ts`) — `type` 필드로 유형 전달
-- [ ] `assertNotBlocked(page)` 함수 (`gateway/` 또는 `coupang/`) — 네비게이션 직후마다 호출, URL + 컨텐츠 검사
-- [ ] `index.ts` 복구 분기 — `BlockDetectedError.type`별 프록시/프로필 교체 결정. `SELECTOR_BUG`는 즉시 중단
-- [ ] 프로필 로테이션 — `user-data/{timestamp}` 동적 경로. 성공 세션 보존, 차단 세션 즉시 삭제
-- [ ] `createPersistentContext(proxy, profileDir)` 시그니처 변경 (`infra/browser.ts`)
-- [ ] SQLite 도입 (`better-sqlite3`) — 차단/프록시/검색어 이력 영구 기록
+- [x] `BlockDetectedError` + `BlockType`(6종 union) — `core/errors.ts`
+- [x] `assertNotBlocked(page)` — `core/blockDetection.ts`. `SELECTOR_BUG`/`AKAMAI_BLOCK`/`COUPANG_APP_BLOCK`/`AKAMAI_CHALLENGE` 4종 검사, `coupang/flow.ts`(검색 결과/상품 페이지 진입 직후) 호출
+- [x] `index.ts` 복구 분기 — `BlockDetectedError.type`별 프록시/프로필 교체. `SELECTOR_BUG`는 `return`으로 안전 종료, `context.close()`는 `finally`에서 한 번만 수행
+- [x] 프로필 로테이션 — `user-data/{timestamp}`. `AKAMAI_*` 차단 시 `fs.rmSync`로 폴더 삭제 후 재생성, `PROXY_ERROR`/`HTTP_ERROR`는 프로필 유지
+- [x] `createPersistentContext(proxy, profileDir)` 시그니처 변경 — `infra/browser.ts`
+- [x] SQLite 도입 (`better-sqlite3`, `infra/db.ts`) — `block_log` / `proxy_stats` / `query_stats`
+- [x] `query_stats` 기반 가중 랜덤 — `buildSearchQuery`가 `fail_count` 낮은 쿼리를 우선 선택
 
-#### SQLite 스키마 (예정)
+#### 남은 작업
+
+- [ ] **`PROXY_ERROR` / `HTTP_ERROR` 미구현** — `assertNotBlocked`은 두 타입을 던지지 않고, `gateway/naver.ts`·`google.ts`의 `page.goto()` 실패(`ERR_TUNNEL_CONNECTION_FAILED`, `Timeout exceeded`, 5xx 등)도 분류 없이 일반 에러로 처리됨 → `index.ts`의 해당 switch 분기는 현재 데드코드. `classifyNavigationError(error)` 같은 헬퍼로 분류해 `BlockDetectedError`를 던지도록 보완 필요
+- [ ] `index.ts`의 `createPersistentContext` / `context.newPage()` 호출이 try 블록 밖에 있어 실패 시 미처리 — try로 감싸고 `main().catch(...)` 안전장치 추가 필요
+- [ ] `AKAMAI_CHALLENGE` 셀렉터(`iframe[src*="challenge"]`, `#px-captcha`)는 추정값 — 실제 챌린지 화면 캡처 후 보정 필요
+- [ ] (보류) `query_stats` 키가 `query` 단독이라 brand 단독 쿼리가 여러 `product`와 페어링될 때 통계가 섞임 — `(query, productId)` 복합키 전환은 운영 데이터 확인 후 재검토
+
+#### SQLite 스키마 (구현 완료, `infra/db.ts`)
 
 ```sql
-CREATE TABLE block_log (
+CREATE TABLE IF NOT EXISTS block_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   proxy_host  TEXT,
   proxy_port  INTEGER,
@@ -157,15 +167,17 @@ CREATE TABLE block_log (
   occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE proxy_stats (
-  host        TEXT,
-  port        INTEGER,
-  fail_count  INTEGER DEFAULT 0,
-  last_failed DATETIME,
+CREATE TABLE IF NOT EXISTS proxy_stats (
+  host          TEXT,
+  port          INTEGER,
+  success_count INTEGER DEFAULT 0,
+  fail_count    INTEGER DEFAULT 0,
+  last_success  DATETIME,
+  last_failed   DATETIME,
   PRIMARY KEY (host, port)
 );
 
-CREATE TABLE query_stats (
+CREATE TABLE IF NOT EXISTS query_stats (
   query         TEXT PRIMARY KEY,
   success_count INTEGER DEFAULT 0,
   fail_count    INTEGER DEFAULT 0,
@@ -173,7 +185,8 @@ CREATE TABLE query_stats (
 );
 ```
 
-`query_stats` 도입 후 `buildSearchQuery`는 `fail_count` 낮은 순 가중치 선택으로 교체 예정.
+- `proxies.txt`가 변경되면(`fs.watch`) 인메모리 블랙리스트 초기화 + `resetProxyStats()`로 `proxy_stats` 전체 삭제 — IP 풀 자체가 바뀌므로 과거 평가는 무효화. `block_log` / `query_stats`는 영구 누적(날짜별 이력 확인용)
+- DB GUI 확인: VS Code `SQLite Viewer` 확장 또는 `DB Browser for SQLite`로 `data/macro.db` 열람 가능
 
 ### 4단계 - 운영 환경 검증 (예정)
 
@@ -243,15 +256,16 @@ CREATE TABLE query_stats (
 - **`ProductTarget` 구조 (2026-06-10 개편)**: `brand: string` + `products: ProductItem[]`. 각 `ProductItem`은 `productId` + `exactNames: string[]`(옵션 변형 전체) + `keywords: string[]`(상품 전용 검색어)를 가짐. `buildSearchQuery`는 상품별 `브랜드+키워드` 후보를 만들어 `{ query, product }` 쌍으로 풀에 모은 뒤 랜덤 선택 — 키워드와 상품이 항상 1:1로 묶여 있어 "한돈"(등갈비 키워드)으로 보쌈 상품을 찾는 식의 교차 매칭이 발생하지 않음. brand 단독 검색만 예외적으로 모든 상품에 연결됨. 실패한 쿼리는 `exclude` Set으로 제외하고 모두 소진 시 `null` 반환
 - **`findTargetProduct` 매칭 전략 (2026-06-10 개편)**: `buildSearchQuery`가 결정한 단일 `ProductItem`만 탐색. `exactNames`(옵션 변형 목록)를 랜덤 셔플 후 하나씩 ① productId 후보군 → exactName 매칭 → ② exactName 단독 매칭(productId 변경 복구) 시도, 첫 매칭에서 즉시 반환 — 매 실행마다 다른 옵션으로 진입. fuzzy 폴백 없음
 - **`ProductNotFoundError`**: `usedQueries: Set<string>` + `exhausted: boolean` 필드. index.ts가 쿼리 누적 및 종료 여부 판단. 차단 오류와 명확히 구분
-- **프록시 블랙리스트 조건**: 타겟 상품 미발견은 프록시 잘못 아님 → 블랙리스트 추가 안 함. 추가 조건: PROXY_ERROR / AKAMAI_BLOCK. RET9999는 프로필 교체로 대응
+- **프록시 블랙리스트 조건**: 타겟 상품 미발견은 프록시 잘못 아님 → 블랙리스트 추가 안 함. 추가 조건: `AKAMAI_BLOCK` / `COUPANG_APP_BLOCK` / `AKAMAI_CHALLENGE` (markFailed). RET9999는 프록시 교체와 별개로 프로필 교체가 핵심 대응
 - **Akamai 차단 메커니즘**: ① 프록시 IP 평판, ② `_abck` 쿠키(세션 쿠키 기반) 복합 추적. 프록시 교체만으로 부족하고 프로필도 교체해야 `_abck` 오염 상태 리셋
-- **프로필 로테이션 전략 (3단계)**: `user-data/{timestamp}` 방식. 성공 세션 보존, 차단 세션 즉시 삭제. `createPersistentContext`에 `profileDir` 인자 추가 예정
-- **ProxyManager 블랙리스트**: 인메모리 관리 (재시작 시 초기화). 3단계에서 SQLite 영구 기록으로 전환 예정
+- **프로필 로테이션 전략 (3단계, 구현 완료)**: `user-data/{timestamp}` 방식. `createPersistentContext(proxy, profileDir)`로 매 시도마다 프로필 경로를 받아 사용. `AKAMAI_*` 차단 시 `fs.rmSync`로 즉시 삭제 후 새 타임스탬프 폴더 생성, 성공 시 그대로 보존
+- **`context.close()` vs 프로필 교체**: `context.close()`는 브라우저 프로세스 자원 정리일 뿐 `userDataDir`에 남은 `_abck` 등 디스크 데이터는 그대로 유지됨. Akamai 세션 신뢰도 리셋은 프로필 폴더 자체를 삭제·재생성해야만 가능 — 그래서 `AKAMAI_*` 계열 차단에서만 프로필을 교체
+- **이중 블랙리스트 구조 (3단계, 구현 완료)**: 인메모리 블랙리스트(이번 실행 한정, 1회 실패 시 즉시 제외)와 DB 블랙리스트(`proxy_stats.fail_count >= PROXY_FAIL_THRESHOLD`, 실행 간 누적)를 병행. `ProxyManager` 생성 시 `loadBlacklistFromDb()`로 DB 블랙리스트를 인메모리에 병합해 시작
 
 ## 현재 브라우저 실행 옵션
 
 ```typescript
-// infra/browser.ts — chromium.launchPersistentContext(ENV.USER_DATA_DIR, options)
+// infra/browser.ts — chromium.launchPersistentContext(profileDir, options)
 channel: "chrome"       // 실제 Chrome 사용 → TLS 지문 해결
 headless: ENV.HEADLESS  // .env HEADLESS 값으로 제어
 
@@ -285,8 +299,9 @@ if (OrigRTC) {
 ```dotenv
 # 기본 설정
 MAX_RETRY=5
-USER_DATA_DIR=./user-data-test
+USER_DATA_ROOT=./user-data-test   # 프로필 로테이션 루트 — 실행마다 {timestamp} 하위 폴더 생성
 PROXY_FILE_PATH=./proxies.txt
+DB_PATH=./data/macro.db
 HEADLESS=false
 
 # 포털 선택 비율 (0~1, 1이면 항상 네이버)
@@ -302,6 +317,11 @@ COUPANG_ENTRY_DELAY=4000
 COUPANG_SEARCH_DELAY=3000
 PORTAL_AFTER_ENTRY_DELAY=3000
 NAV_TIMEOUT=30000
+CHALLENGE_RETRY_DELAY=10000   # AKAMAI_CHALLENGE 재시도 전 대기
+
+# 차단/프록시 임계값
+HTTP_ERROR_THRESHOLD=3   # HTTP_ERROR 연속 N회 시 프록시 교체 (현재 미사용 — PROXY_ERROR/HTTP_ERROR 미구현)
+PROXY_FAIL_THRESHOLD=2   # proxy_stats.fail_count 누적 시 DB 블랙리스트 등재
 ```
 
 ## 실행 환경
@@ -324,14 +344,14 @@ npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
 
 ## 다음 작업
 
-> 2.6단계(다중 상품 / 키워드-상품 바인딩 구조 개편) 완료. 3단계 진입 준비 완료 (2026-06-10).
+> 3단계(메인 루프 및 예외 처리, SQLite 연동) 1차 구현 완료 (2026-06-10). 아래 보완 작업 후 4단계 진입.
 
-### 3단계 구현 (우선순위 순)
+### 3단계 보완 (우선순위 순)
 
-1. `assertNotBlocked(page)` + `BlockDetectedError` 구현 (`core/errors.ts` + `gateway/` 또는 `coupang/`) — 차단 유형 분류의 기반
-2. `createPersistentContext(proxy, profileDir)` 시그니처 변경 (`infra/browser.ts`)
-3. `index.ts` 복구 분기 — `BlockDetectedError.type`별 프록시/프로필 교체
-4. SQLite 도입 — `better-sqlite3`, `block_log` / `proxy_stats` / `query_stats` 테이블
+1. **`PROXY_ERROR` / `HTTP_ERROR` 분류 구현** — `core/blockDetection.ts`에 `classifyNavigationError(error)` 등 헬퍼 추가, `gateway/naver.ts` / `gateway/google.ts`의 `page.goto()` 실패(타임아웃, `ERR_TUNNEL_*`, 5xx)를 감지해 `BlockDetectedError`로 던지도록 수정 — 현재 `index.ts`의 해당 switch 분기는 데드코드
+2. **`index.ts` 안전장치 보강** — `createPersistentContext` / `context.newPage()`를 try 블록 안으로 이동, `main().catch((err) => { console.error(err); process.exit(1); })` 추가
+3. **`AKAMAI_CHALLENGE` 셀렉터 보정** — 실제 챌린지 화면 캡처 후 `core/blockDetection.ts`의 추정 셀렉터 검증
+4. (보류) `query_stats` 키를 `(query, productId)` 복합키로 분리 검토 — 운영 데이터 누적 후 재검토
 
 ### 이후
 
