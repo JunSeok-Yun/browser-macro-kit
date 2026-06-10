@@ -1,5 +1,6 @@
 import { ENV } from "../config/env";
 import * as fs from "fs";
+import { getBlacklistedProxies, recordProxyResult, resetProxyStats } from "./db";
 
 export interface ProxyEntry {
   host: string;
@@ -16,6 +17,7 @@ export class ProxyManager {
 constructor(filePath: string = ENV.PROXY_FILE_PATH) {
     this.filePath = filePath;
     this.reload();
+    this.loadBlacklistFromDb()
     this.watchFile();
   }
 
@@ -42,6 +44,15 @@ constructor(filePath: string = ENV.PROXY_FILE_PATH) {
     console.log(`[ProxyManager] 프록시 ${this.proxies.length}개 로드 완료.`);
   }
 
+  // DB에 누적된 fail_count가 임계값 이상인 프록시를 블랙리스트에 반영
+  private loadBlacklistFromDb() {
+    const persisted = getBlacklistedProxies(ENV.PROXY_FAIL_THRESHOLD);
+    persisted.forEach((key) => this.blacklist.add(key));
+    if (persisted.size > 0) {
+      console.log(`[ProxyManager] DB 기록 기반 블랙리스트 ${persisted.size}개 로드.`);
+    }
+  }
+
   // 파일 변경 감지 함수
   // fs.watch는 변경 이벤트가 연속으로 중복 발생할 수 있어서 debounce 처리
   private watchFile() {
@@ -52,7 +63,9 @@ constructor(filePath: string = ENV.PROXY_FILE_PATH) {
       this.reloadTimer = setTimeout(() => {
         console.log("[ProxyManager] 프록시 파일 변경 감지 → 리로드합니다.");
         this.blacklist.clear();
-        this.reload();
+        this.reload();      
+        resetProxyStats(); // proxy_stats 초기화 — IP 풀이 바뀌었으므로 과거 평가 무효화
+        console.log("[ProxyManager] proxy_stats 초기화 완료. 새 프록시 풀로 시작합니다.");
       }, 300);
     });
   }
@@ -71,8 +84,14 @@ constructor(filePath: string = ENV.PROXY_FILE_PATH) {
   markFailed(proxy: ProxyEntry): ProxyEntry | null {
     const key = `${proxy.host}:${proxy.port}`;
     this.blacklist.add(key);
+    recordProxyResult(proxy, true);
     console.warn(`[ProxyManager] ${key} 실패 처리. 남은 프록시: ${this.proxies.length - this.blacklist.size}개`);
     return this.getRandom();
+  }
+
+  // 성공 처리 — DB 기록만
+  markSuccess(proxy: ProxyEntry): void {
+    recordProxyResult(proxy, false);
   }
 
   // playwright 연동 함수
