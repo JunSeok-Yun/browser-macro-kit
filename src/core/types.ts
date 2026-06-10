@@ -1,10 +1,10 @@
 export interface ProductItem {
   productId: string;
-  exactName: string;
+  exactNames: string[];
+  keywords: string[];
 }
 
 export interface ProductTarget {
   brand: string;
-  keywords: string[];
   products: ProductItem[];
 }
