@@ -1,11 +1,12 @@
 import { Page } from "patchright";
 import { ENV } from "../config/env";
 import { ProductTarget } from "../core/types";
-import { ProductNotFoundError } from "../core/errors";
+import { BlockDetectedError, ProductNotFoundError } from "../core/errors";
 import { sleep } from "../utils";
 import { runNaverGateway } from "./naver";
 import { runGoogleGateway } from "./google";
 import { runCoupangSearchFlow } from "../coupang/flow";
+import { assertNotBlocked } from "../core/blockDetection";
 
 export async function runPortalGateway(
   page: Page,
@@ -20,6 +21,7 @@ export async function runPortalGateway(
       : await runGoogleGateway(page);
 
     await sleep(ENV.PORTAL_AFTER_ENTRY_DELAY);
+    await assertNotBlocked(targetPage);
 
     const currentUrl = targetPage.url();
     if (currentUrl.includes("coupang.com")) {
@@ -31,7 +33,7 @@ export async function runPortalGateway(
       return false;
     }
   } catch (error) {
-    if (error instanceof ProductNotFoundError) throw error;
+    if (error instanceof ProductNotFoundError || error instanceof BlockDetectedError) throw error;
     console.error("[Error] 게이트웨이 구동 중 에러 발생:", error);
     return false;
   }

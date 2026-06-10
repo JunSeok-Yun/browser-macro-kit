@@ -7,6 +7,8 @@ import { typeLikeHuman, clearSearchInput } from "../automation/keyboard";
 import { randomScrollDwell, scrollToTop } from "../automation/scroll";
 import { moveMouseAlongCurveAndClick } from "../automation/mouse";
 import { buildSearchQuery, findTargetProduct, normalizeProductText, extractProductId } from "./search";
+import { assertNotBlocked } from "../core/blockDetection";
+import { recordQueryResult } from "../infra/db";
 
 export async function runCoupangSearchFlow(
   page: Page,
@@ -42,6 +44,7 @@ export async function runCoupangSearchFlow(
 
     await page.keyboard.press("Enter");
     await page.waitForLoadState("domcontentloaded");
+    await assertNotBlocked(page);
     await sleep(ENV.COUPANG_SEARCH_DELAY);
     await randomScrollDwell(page);
 
@@ -49,16 +52,19 @@ export async function runCoupangSearchFlow(
     const productLink = await findTargetProduct(page, product);
 
     if (productLink) {
+      recordQueryResult(query, true);
       const [productPage] = await Promise.all([
         page.context().waitForEvent("page"),
         moveMouseAlongCurveAndClick(page, productLink),
       ]);
       await productPage.waitForLoadState("domcontentloaded");
+      await assertNotBlocked(productPage);
       await sleep(ENV.COUPANG_ENTRY_DELAY);
       await randomScrollDwell(productPage);
       return;
     }
 
+    recordQueryResult(query, false);
     console.warn(`[Behavior] "${query}" 결과에서 타겟 상품 없음.`);
   }
 }

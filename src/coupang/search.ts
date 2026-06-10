@@ -1,5 +1,6 @@
 import { Page, Locator } from "patchright";
 import { ProductTarget, ProductItem } from "../core/types";
+import { getQueryFailCount } from "../infra/db";
 
 export function buildSearchQuery(
   target: ProductTarget,
@@ -21,7 +22,16 @@ export function buildSearchQuery(
   }
 
   if (pairs.length === 0) return null;
-  return pairs[Math.floor(Math.random() * pairs.length)];
+  // fail_count가 낮을수록 선택 확률이 높아지는 가중 랜덤
+  const weights = pairs.map(p => 1 / (1 + getQueryFailCount(p.query)));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+
+  let r = Math.random() * total;
+  for (let i = 0; i < pairs.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return pairs[i];
+  }
+  return pairs[pairs.length - 1];
 }
 
 export function extractProductId(href: string): string | null {
