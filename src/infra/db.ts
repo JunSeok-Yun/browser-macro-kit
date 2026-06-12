@@ -17,6 +17,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS block_log (
   block_type  TEXT,
   message     TEXT,
   html_path   TEXT,
+  profile_dir TEXT,
   occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`);
 
@@ -24,6 +25,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS block_log (
 const blockLogColumns = db.prepare(`PRAGMA table_info(block_log)`).all() as { name: string }[];
 if (!blockLogColumns.some((c) => c.name === "html_path")) {
   db.exec(`ALTER TABLE block_log ADD COLUMN html_path TEXT`);
+}
+if (!blockLogColumns.some((c) => c.name === "profile_dir")) {
+  db.exec(`ALTER TABLE block_log ADD COLUMN profile_dir TEXT`);
 }
 
 db.exec(`CREATE TABLE IF NOT EXISTS proxy_stats (
@@ -45,10 +49,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS query_stats (
 
 // --- export 함수들 (모두 동기 API) ---
 
-export function logBlock(proxy: ProxyEntry | null, type: BlockType, message: string, htmlPath: string | null = null): void {
+export function logBlock(proxy: ProxyEntry | null, type: BlockType, message: string, htmlPath: string | null = null, profileDir: string | null = null): void {
   db.prepare(
-    `INSERT INTO block_log (proxy_host, proxy_port, block_type, message, html_path) VALUES (?, ?, ?, ?, ?)`
-  ).run(proxy?.host ?? null, proxy?.port ?? null, type, message, htmlPath);
+    `INSERT INTO block_log (proxy_host, proxy_port, block_type, message, html_path, profile_dir) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(proxy?.host ?? null, proxy?.port ?? null, type, message, htmlPath, profileDir);
 }
 
 export function recordProxyResult(proxy: ProxyEntry, failed: boolean): void {
