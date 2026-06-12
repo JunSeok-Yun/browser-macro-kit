@@ -5,7 +5,6 @@ export interface RecoveryPolicy {
     rotateProxy: boolean;
     rotateProfile: boolean;
     extraDelayMs?: number;
-    terminal?: boolean; // true면 즉시 프로그램 종료 (코드 버그 등 재시도 무의미)
 }
 
 export const BLOCK_RECOVERY: Record<BlockType, RecoveryPolicy> = {
