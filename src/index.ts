@@ -23,8 +23,12 @@ async function applyRecoveryPolicy(
   if (policy.rotateProxy) {
     proxy = proxyManager.markFailed(proxy)!;
   }
-  if (policy.rotateProfile) {
-    fs.rmSync(profileDir, { recursive: true, force: true });
+    if (policy.rotateProfile) {
+    try {
+      fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+    } catch (err) {
+      console.warn(`[메인] 프로필 폴더 삭제 실패 (${profileDir}):`, err);
+    }
     profileDir = newProfileDir();
   }
   if (policy.extraDelayMs) {
@@ -99,7 +103,7 @@ async function runSession(proxyManager: ProxyManager): Promise<void> {
         exhausted = true; // 차단 아님 → 프로필/프록시 교체 불필요
       } else if (error instanceof BlockDetectedError) {
         console.error(`[메인] 차단 감지 (${error.type}): ${error.message}`);
-        logBlock(proxy, error.type, error.message, error.htmlPath);
+        logBlock(proxy, error.type, error.message, error.htmlPath, profileDir);
 
         // HTTP_ERROR는 연속 횟수 기반 정책이라 정책 테이블보다 먼저 처리
         if (error.type === "HTTP_ERROR") {
