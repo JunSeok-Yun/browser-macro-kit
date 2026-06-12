@@ -7,3 +7,4 @@ chrome-profile/
 .vscode/
 *.txt
 user-data*/
+data/**

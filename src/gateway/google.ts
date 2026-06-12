@@ -1,3 +1,5 @@
+import { assertPortalNotBlocked } from "../core/blockDetection"
+import { safeGoto, withNavigationErrorHandling } from "../core/blockDetection";
 import { Page } from "patchright";
 import { ENV } from "../config/env";
 import { typeLikeHuman } from "../automation/keyboard";
@@ -6,7 +8,7 @@ import { sleep } from "../utils";
 export async function runGoogleGateway(page: Page): Promise<Page> {
   console.log("[Gateway] 구글을 통해 쿠팡 진입을 시도합니다.");
 
-  await page.goto("https://www.google.com");
+  await safeGoto(page, "https://www.google.com");
   await page.waitForTimeout(
     Math.floor(Math.random() * ENV.GOOGLE_ENTRY_DELAY_RANGE) + ENV.GOOGLE_ENTRY_DELAY_MIN
   );
@@ -16,15 +18,16 @@ export async function runGoogleGateway(page: Page): Promise<Page> {
 
   await page.waitForLoadState("domcontentloaded");
   await sleep(ENV.GOOGLE_SEARCH_DELAY);
+  await assertPortalNotBlocked(page, "google");
 
   console.log("[Gateway] 구글 검색 결과에서 실제 이동 가능한 쿠팡 링크 요소를 탐색합니다.");
 
   const googleResultLink = page
     .locator(
       [
-        'a:has-text("쿠팡")',
-        'a:has-text("coupang.com")',
-        'a:has(h3:has-text("쿠팡"))',
+        'a:has-text("쿠팡"):not([href*="link.coupang.com"])',
+        'a:has-text("coupang.com"):not([href*="link.coupang.com"])',
+        'a:has(h3:has-text("쿠팡")):not([href*="link.coupang.com"])',
       ].join(", "),
     )
     .first();
@@ -38,10 +41,12 @@ export async function runGoogleGateway(page: Page): Promise<Page> {
 
   console.log("[Gateway] 링크 클릭 후 쿠팡 로딩을 대기합니다...");
 
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded", { timeout: ENV.NAV_TIMEOUT }),
-    googleResultLink.evaluate((el) => (el as HTMLElement).click()),
-  ]);
+  await withNavigationErrorHandling(() =>
+    Promise.all([
+      page.waitForURL((url) => !url.hostname.includes("google.com"), { timeout: ENV.NAV_TIMEOUT }),
+      googleResultLink.click(),
+    ])
+  );
 
   await page.waitForLoadState("load");
   await sleep(ENV.COUPANG_ENTRY_DELAY);

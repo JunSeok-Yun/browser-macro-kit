@@ -1,3 +1,5 @@
+import { assertPortalNotBlocked } from "../core/blockDetection";
+import { safeGoto } from "../core/blockDetection";
 import { Page } from "patchright";
 import { ENV } from "../config/env";
 import { typeLikeHuman } from "../automation/keyboard";
@@ -8,7 +10,7 @@ import { sleep } from "../utils";
  */
 export async function runNaverGateway(page: Page) {
   console.log("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
-  await page.goto("https://www.naver.com");
+  await safeGoto(page, "https://www.naver.com"); 
   await sleep(ENV.NAVER_ENTRY_DELAY);
 
   // 1. 네이버 메인 검색창 입력 및 엔터
@@ -19,6 +21,7 @@ export async function runNaverGateway(page: Page) {
   // DOM이 안정화될 때까지 대기
   await page.waitForLoadState("domcontentloaded");
   await sleep(ENV.NAVER_SEARCH_DELAY);
+  await assertPortalNotBlocked(page, "naver");
 
   console.log("[Gateway] 네이버 검색 결과에서 실제 이동 가능한 링크 요소를 탐색합니다.");
 
@@ -46,7 +49,7 @@ export async function runNaverGateway(page: Page) {
   if (!href) throw new Error("링크 href를 찾을 수 없습니다.");
 
   console.log("[Gateway] 쿠팡으로 이동합니다...");
-  await page.goto(href, { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT});
+  await safeGoto(page, href, { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT});
   await sleep(ENV.COUPANG_ENTRY_DELAY); // 쿠팡 메인화면 UI가 완전히 그려질 때까지 대기
 
   return page;

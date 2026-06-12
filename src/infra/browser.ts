@@ -2,8 +2,8 @@ import { ENV } from "../config/env";
 import { chromium, BrowserContext } from "patchright";
 import { ProxyEntry } from "../infra/proxyManager";
 
-export async function createPersistentContext(proxy: ProxyEntry): Promise<BrowserContext> {
-  const context = await chromium.launchPersistentContext(ENV.USER_DATA_DIR, {
+export async function createPersistentContext(proxy: ProxyEntry, profileDir: string): Promise<BrowserContext> {
+  const context = await chromium.launchPersistentContext(profileDir, {
     headless: ENV.HEADLESS,
     channel: "chrome",
     proxy: { server: `http://${proxy.host}:${proxy.port}` },
