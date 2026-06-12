@@ -16,8 +16,15 @@ db.exec(`CREATE TABLE IF NOT EXISTS block_log (
   proxy_port  INTEGER,
   block_type  TEXT,
   message     TEXT,
+  html_path   TEXT,
   occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`);
+
+// 기존에 생성된 DB는 CREATE TABLE IF NOT EXISTS로 새 컬럼이 추가되지 않으므로 마이그레이션 필요
+const blockLogColumns = db.prepare(`PRAGMA table_info(block_log)`).all() as { name: string }[];
+if (!blockLogColumns.some((c) => c.name === "html_path")) {
+  db.exec(`ALTER TABLE block_log ADD COLUMN html_path TEXT`);
+}
 
 db.exec(`CREATE TABLE IF NOT EXISTS proxy_stats (
   host          TEXT,
@@ -38,28 +45,28 @@ db.exec(`CREATE TABLE IF NOT EXISTS query_stats (
 
 // --- export 함수들 (모두 동기 API) ---
 
-export function logBlock(proxy: ProxyEntry | null, type: BlockType, message: string): void {
+export function logBlock(proxy: ProxyEntry | null, type: BlockType, message: string, htmlPath: string | null = null): void {
   db.prepare(
-    `INSERT INTO block_log (proxy_host, proxy_port, block_type, message) VALUES (?, ?, ?, ?)`
-  ).run(proxy?.host ?? null, proxy?.port ?? null, type, message);
+    `INSERT INTO block_log (proxy_host, proxy_port, block_type, message, html_path) VALUES (?, ?, ?, ?, ?)`
+  ).run(proxy?.host ?? null, proxy?.port ?? null, type, message, htmlPath);
 }
 
 export function recordProxyResult(proxy: ProxyEntry, failed: boolean): void {
   if (failed) {
     db.prepare(
       `INSERT INTO proxy_stats (host, port, fail_count, last_failed)
-       VALUES (?, ?, 1, CURRENT_TIMESTAMP)
-       ON CONFLICT(host, port) DO UPDATE SET
-         fail_count = fail_count + 1,
-         last_failed = CURRENT_TIMESTAMP`
+        VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT(host, port) DO UPDATE SET
+          fail_count = fail_count + 1,
+          last_failed = CURRENT_TIMESTAMP`
     ).run(proxy.host, proxy.port);
   } else {
     db.prepare(
       `INSERT INTO proxy_stats (host, port, success_count, last_success)
-       VALUES (?, ?, 1, CURRENT_TIMESTAMP)
-       ON CONFLICT(host, port) DO UPDATE SET
-         success_count = success_count + 1,
-         last_success = CURRENT_TIMESTAMP`
+        VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT(host, port) DO UPDATE SET
+          success_count = success_count + 1,
+          last_success = CURRENT_TIMESTAMP`
     ).run(proxy.host, proxy.port);
   }
 }
