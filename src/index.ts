@@ -4,7 +4,7 @@ import { ENV } from "./config/env";
 import { DEFAULT_TARGET } from "./config/target";
 import { createPersistentContext } from "./infra/browser";
 import { runPortalGateway } from "./gateway";
-import { ProductNotFoundError, BlockDetectedError, BlockType} from "./core/errors";
+import { ProductNotFoundError, BlockDetectedError } from "./core/errors";
 import { BLOCK_RECOVERY, RecoveryPolicy } from "./core/recovery";
 import { ProxyManager, ProxyEntry } from "./infra/proxyManager";
 import { logBlock } from "./infra/db";
@@ -45,12 +45,7 @@ async function main() {
     for (let session = 1; session <= ENV.SESSION_COUNT; session++) {
       console.log(`[메인] ===== 세션 ${session}/${ENV.SESSION_COUNT} 시작 =====`);
 
-      const { terminalType } = await runSession(proxyManager);
-
-      if (terminalType) {
-        console.error(`[메인] ${terminalType} — 코드 수정이 필요합니다. 즉시 종료합니다.`);
-        break;
-      }
+      await runSession(proxyManager);
     }
   } finally {
     proxyManager.destroy();
@@ -66,7 +61,7 @@ main().catch((err) => {
 
 
 /** 세션 1회 = 상품 탐색 1번. MAX_RETRY번까지 프록시/프로필을 바꿔가며 재시도. */
-async function runSession(proxyManager: ProxyManager): Promise<{ terminalType: BlockType | null }> {
+async function runSession(proxyManager: ProxyManager): Promise<void> {
   const usedQueries = new Set<string>();
   let success = false;
   let proxy = proxyManager.getRandom();
@@ -86,7 +81,6 @@ async function runSession(proxyManager: ProxyManager): Promise<{ terminalType: B
 
     let pendingPolicy: RecoveryPolicy | null = null;
     let exhausted = false;
-    let terminalType: BlockType | null = null;
 
     try {
       const result = await runPortalGateway(page, DEFAULT_TARGET, usedQueries);
@@ -105,7 +99,7 @@ async function runSession(proxyManager: ProxyManager): Promise<{ terminalType: B
         exhausted = true; // 차단 아님 → 프로필/프록시 교체 불필요
       } else if (error instanceof BlockDetectedError) {
         console.error(`[메인] 차단 감지 (${error.type}): ${error.message}`);
-        logBlock(proxy, error.type, error.message);
+        logBlock(proxy, error.type, error.message, error.htmlPath);
 
         // HTTP_ERROR는 연속 횟수 기반 정책이라 정책 테이블보다 먼저 처리
         if (error.type === "HTTP_ERROR") {
@@ -116,12 +110,7 @@ async function runSession(proxyManager: ProxyManager): Promise<{ terminalType: B
           }
           // 프로필 유지, 정책 적용 없음
         } else {
-          const policy = BLOCK_RECOVERY[error.type];
-          if (policy.terminal) {
-            terminalType = error.type;
-          } else {
-            pendingPolicy = policy;
-          }
+          pendingPolicy = BLOCK_RECOVERY[error.type];
         }
       } else {
         console.error(`[메인] 시도 ${i} 중 에러 발생:`, error);
@@ -129,10 +118,6 @@ async function runSession(proxyManager: ProxyManager): Promise<{ terminalType: B
       }
     } finally {
       await context.close();
-    }
-
-    if (terminalType) {
-      return { terminalType };
     }
     if (success || exhausted) {
       break;
@@ -145,5 +130,4 @@ async function runSession(proxyManager: ProxyManager): Promise<{ terminalType: B
   if (!success) {
     console.error(`[메인] ${ENV.MAX_RETRY}회 시도 모두 실패. 세션을 종료합니다.`);
   }
-  return { terminalType: null };
 }

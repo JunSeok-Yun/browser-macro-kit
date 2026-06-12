@@ -1,5 +1,6 @@
 import { Page, Response } from "patchright";
 import { BlockDetectedError, BlockType } from "./errors";
+import { saveDebugHtml } from "../infra/debugCapture";
 
 const PROXY_ERROR_PATTERNS = [
     "ERR_TUNNEL_CONNECTION_FAILED",
@@ -65,15 +66,22 @@ export async function withNavigationErrorHandling<T>(action: () => Promise<T>): 
 
 export type PortalType = "naver" | "google";
 
+/** 현재 페이지 HTML을 캡처해 저장한 뒤 BlockDetectedError를 던짐 */
+async function captureAndThrow(page: Page, message: string, type: BlockType): Promise<never> {
+    const html = await page.content().catch(() => "");
+    const htmlPath = saveDebugHtml(html, type);
+    throw new BlockDetectedError(message, type, htmlPath);
+}
+
 export async function assertPortalNotBlocked(page: Page, portal: PortalType): Promise<void> {
     if (portal === "google") {
         const url = page.url();
         if (url.includes("/sorry/")) {
-        throw new BlockDetectedError(`PORTAL_CAPTCHA: 구글 비정상 트래픽 감지 (${url})`, "PORTAL_CAPTCHA");
+        await captureAndThrow(page, `PORTAL_CAPTCHA: 구글 비정상 트래픽 감지 (${url})`, "PORTAL_CAPTCHA");
         }
         const recaptcha = await page.locator('iframe[src*="recaptcha"], #captcha-form').count();
         if (recaptcha > 0) {
-        throw new BlockDetectedError("PORTAL_CAPTCHA: 구글 reCAPTCHA 감지", "PORTAL_CAPTCHA");
+        await captureAndThrow(page, "PORTAL_CAPTCHA: 구글 reCAPTCHA 감지", "PORTAL_CAPTCHA");
         }
     }
 
@@ -82,12 +90,12 @@ export async function assertPortalNotBlocked(page: Page, portal: PortalType): Pr
         .locator('#captcha_img, .captcha_wrap, img[alt*="자동입력"]')
         .count();
         if (captcha > 0) {
-        throw new BlockDetectedError("PORTAL_CAPTCHA: 네이버 캡차 감지", "PORTAL_CAPTCHA");
+        await captureAndThrow(page, "PORTAL_CAPTCHA: 네이버 캡차 감지", "PORTAL_CAPTCHA");
         }
 
         const bodyText = await page.locator("body").innerText().catch(() => "");
         if (/비정상적인.*(접근|검색|트래픽)/.test(bodyText)) {
-        throw new BlockDetectedError("PORTAL_CAPTCHA: 네이버 비정상 접근 감지", "PORTAL_CAPTCHA");
+        await captureAndThrow(page, "PORTAL_CAPTCHA: 네이버 비정상 접근 감지", "PORTAL_CAPTCHA");
         }
     }
 }
@@ -95,34 +103,35 @@ export async function assertPortalNotBlocked(page: Page, portal: PortalType): Pr
 export async function assertNotBlocked(page: Page): Promise<void> {
     const url = page.url();
 
-    // SELECTOR_BUG: 잘못된 셀렉터로 link.coupang.com(애드 리다이렉트)을 클릭한 경우
-    if (url.includes("link.coupang.com")) {
-    throw new BlockDetectedError(`SELECTOR_BUG: ${url}`, "SELECTOR_BUG");
-    }
-
-    // AKAMAI_CHALLENGE: 챌린지 iframe 존재 여부 (실제 셀렉터는 한 번 차단 걸렸을 때 캡처해서 보정 필요)
+    // AKAMAI_CHALLENGE: 챌린지 iframe 존재 여부 (...)
     const challenge = await page
     .locator('iframe[src*="challenge"], #px-captcha')
     .count();
     if (challenge > 0) {
-    throw new BlockDetectedError("AKAMAI_CHALLENGE 감지", "AKAMAI_CHALLENGE");
+    await captureAndThrow(page, "AKAMAI_CHALLENGE 감지", "AKAMAI_CHALLENGE");
     }
 
     const bodyText = await page.locator("body").innerText().catch(() => "");
 
-        // AKAMAI_BLOCK: Access Denied 페이지 (Akamai) / Sorry, you have been blocked (Cloudflare)
-    // 두 WAF 모두 coupang.com 앞단에 있을 수 있으며, 복구 정책(프록시+프로필 교체)이 동일해 같은 타입으로 처리
+    // AKAMAI_BLOCK: Access Denied 페이지 (Akamai) / Sorry, you have been blocked (Cloudflare)
+    // link.coupang.com에 머물러 있어도 이 페이지 자체가 차단 응답일 수 있으므로 SELECTOR_BUG보다 먼저 검사
     if (
         /Access Denied/i.test(bodyText) ||
         /Reference\s*[:#]\s*18\./.test(bodyText) ||
         /Sorry, you have been blocked/i.test(bodyText) ||
         /don't have permission to access this page/i.test(bodyText)
     ) {
-    throw new BlockDetectedError("AKAMAI_BLOCK 감지", "AKAMAI_BLOCK");
+    await captureAndThrow(page, "AKAMAI_BLOCK 감지", "AKAMAI_BLOCK");
     }
 
     // COUPANG_APP_BLOCK: RET9999
     if (/"rCode"\s*:\s*"RET9999"/.test(bodyText)) {
-    throw new BlockDetectedError("COUPANG_APP_BLOCK(RET9999) 감지", "COUPANG_APP_BLOCK");
+    await captureAndThrow(page, "COUPANG_APP_BLOCK(RET9999) 감지", "COUPANG_APP_BLOCK");
+    }
+
+    // SELECTOR_BUG: 위의 차단 신호 없이 link.coupang.com(애드 리다이렉트)에 머물러 있는 경우
+    // → 리다이렉트가 아직 coupang.com까지 완료되지 않은 일시적 상태로 판단
+    if (url.includes("link.coupang.com")) {
+    await captureAndThrow(page, `SELECTOR_BUG: ${url}`, "SELECTOR_BUG");
     }
 }
