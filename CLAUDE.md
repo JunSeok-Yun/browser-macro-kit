@@ -168,8 +168,6 @@ interface ProductTarget {
 
 #### 남은 작업
 
-- [ ] `AKAMAI_CHALLENGE`(`iframe[src*="challenge"]`, `#px-captcha`) / `PORTAL_CAPTCHA`(`#captcha_img`, `.captcha_wrap`, `/sorry/` 등) 셀렉터는 모두 추정값 — 실제 차단/캡차 화면 캡처 후 보정 필요
-- [ ] (보류) `query_stats` 키가 `query` 단독이라 brand 단독 쿼리가 여러 `product`와 페어링될 때 통계가 섞임 — `(query, productId)` 복합키 전환은 운영 데이터 확인 후 재검토
 
 ### 3.1단계 - 구글 게이트웨이 안정화 및 AKAMAI_BLOCK 감지 보정 (완료, 2026-06-11)
 
@@ -214,7 +212,29 @@ CREATE TABLE IF NOT EXISTS query_stats (
 
 ### 4단계 - 운영 환경 검증 (예정)
 
+#### 안정성 / 인프라
+
 - [ ] VM(운영 환경)에서 반복 실행 안정성 검증
+- [ ] **프로필 폴더 EPERM 정리** — `AKAMAI_*` 차단 시 `fs.rmSync(profileDir, {recursive:true, force:true})`로 프로필 폴더를 삭제하는데, Windows에서 방금 닫은 Chrome 프로세스가 파일을 점유 중이면 `EPERM`이 발생하고 `force:true` 때문에 조용히 무시되어 폴더가 삭제되지 않고 남음 (현재 `user-data-test/`에 94개 누적 확인). 4단계 진입 전 기존 leftover 폴더 일괄 정리 (완료) + 삭제 실패 시 재시도/지연 로직 추가 필요
+- [ ] **좀비 프로세스 정리** — headed 모드로 장시간 반복 실행 시 Chrome 프로세스가 메모리에 잔류하는지 우선 확인. 잔류가 확인되면 `taskkill /f /im chrome.exe` 주기 실행은 멀티 인스턴스 환경에서 다른 인스턴스의 브라우저까지 종료시키므로, `launchPersistentContext`가 반환하는 프로세스 PID 기반 종료로 대체 검토
+- [ ] **SQLite 타임스탬프 KST 통일** — `CURRENT_TIMESTAMP`는 UTC 기준 저장됨. `datetime('now', 'localtime')`로 교체 (DB를 PostgreSQL/MySQL로 바꿔도 동일하게 로컬 시간대 저장 여부 확인 필요)
+
+#### 처리량 / 스케줄링
+
+- [ ] **시간당 처리량 측정** — 최근 로그 기준 1회 시도 성공 세션은 평균 약 56~57초(`itime` 타임스탬프 기준 61/56/57/57/52초). 목표 일 2,500 ~ 3,000회 대비, HaiIP 갱신 시간(07:00~10:00) 제외 21시간 가동 시 단일 인스턴스 최대 약 1,326회 → **멀티 인스턴스(약 2~3개) 필요 여부 판단**
+- [ ] **스케줄러 도입** — HaiIP 갱신 시간(07:00~10:00) 회피하여 자동 실행. Windows 작업 스케줄러(`schtasks`) 또는 Node 상시 프로세스 내부 시간 체크 방식 검토
+
+#### 모니터링
+
+- [ ] **실시간 모니터링 대시보드** — SQLite 기반(단일 인스턴스, `better-sqlite3` WAL 모드로 읽기 동시성 확보) / PostgreSQL 기반(멀티 인스턴스) 두 경로 검토
+- [ ] **(보류) 타겟 플랫폼(쿠팡 파트너센터) 수치 대조** — 매크로 실행 전후로 판매자 계정 로그인/스크래핑은 2FA 등으로 자동화 난이도가 높고, 판매자 계정 자체가 이상 행동으로 탐지될 리스크가 있어 권장 안 함. 대안: 하루 1회 수동 확인 후 대시보드에 수동 입력
+
+#### 멀티 인스턴스 확장 (검토 중)
+
+- [ ] **DB: SQLite → PostgreSQL 전환 여부** — 여러 인스턴스가 동시에 `data/macro.db`에 쓰기 시 `SQLITE_BUSY` 발생 가능. 대시보드 이전에 로깅 자체가 막히는 문제라 우선순위 높음. MySQL보다 PostgreSQL이 SQLite 문법과 유사해 마이그레이션 부담이 적음
+- [ ] **프록시 풀 동시 사용 조율** — 현재 DB 블랙리스트는 "실패한 IP"만 인스턴스 간 공유. 여러 인스턴스가 동시에 같은 IP를 선택하는 것을 막는 "사용 중" 상태 공유 메커니즘 없음
+- [ ] **인스턴스 간 행동 패턴 다양화** — 동일 VM/시간대에 여러 인스턴스가 비슷한 키워드·타이밍으로 동시 진입 시 패턴 탐지 위험 → 인스턴스별 타이밍 jitter, 키워드 분배 검토
+- [ ] **디스크 용량 누적 가속** — 프로필 폴더 leftover 문제(위 EPERM 항목)는 단일 인스턴스에서도 발생하지만, 인스턴스 수만큼 생성 속도가 배가되므로 멀티 인스턴스 전환 전 정리/재시도 로직 적용이 선행되어야 함
 
 ## 테스트 결과 및 현황 (2026-06-09 기준)
 
@@ -368,6 +388,11 @@ npx ts-node src/index.ts                     # 실제 자동화 루프
 npx ts-node src/runDiagnostics.ts            # CreepJS 지문 분석
 npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
 ```
+
+## 보류 작업
+
+- [ ] (보류)`AKAMAI_CHALLENGE`(`iframe[src*="challenge"]`, `#px-captcha`) / `PORTAL_CAPTCHA`(`#captcha_img`, `.captcha_wrap`, `/sorry/` 등) 셀렉터는 모두 추정값 — 실제 차단/캡차 화면 캡처 후 보정 필요
+- [ ] (보류) `query_stats` 키가 `query` 단독이라 brand 단독 쿼리가 여러 `product`와 페어링될 때 통계가 섞임 — `(query, productId)` 복합키 전환은 운영 데이터 확인 후 재검토
 
 ## 다음 작업
 
