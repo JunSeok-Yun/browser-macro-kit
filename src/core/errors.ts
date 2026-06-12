@@ -14,6 +14,7 @@ export type BlockType =
   | "AKAMAI_BLOCK"
   | "COUPANG_APP_BLOCK"
   | "AKAMAI_CHALLENGE"
+  | "PORTAL_CAPTCHA"
   | "PROXY_ERROR"
   | "HTTP_ERROR";
 

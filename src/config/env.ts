@@ -3,7 +3,8 @@ import * as path from "path";
 
 export const ENV = {
   MAX_RETRY:    parseInt(process.env.MAX_RETRY ?? "5", 10),
-USER_DATA_ROOT: path.resolve(process.cwd(), process.env.USER_DATA_ROOT ?? "./user-data-test"),
+  USER_DATA_ROOT: path.resolve(process.cwd(), process.env.USER_DATA_ROOT ?? "./user-data-test"),
+  SESSION_COUNT: parseInt(process.env.SESSION_COUNT ?? "10", 10),
   PROXY_FILE_PATH: path.resolve(process.cwd(), process.env.PROXY_FILE_PATH ?? "proxies.txt"),
   DB_PATH: path.resolve(process.cwd(), process.env.DB_PATH ?? "./data/macro.db"),
   HEADLESS:     process.env.HEADLESS === "true",
