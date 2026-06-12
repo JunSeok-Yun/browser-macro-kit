@@ -19,7 +19,7 @@ export type BlockType =
   | "HTTP_ERROR";
 
   export class BlockDetectedError extends Error {
-  constructor(message: string, public readonly type: BlockType) {
+  constructor(message: string, public readonly type: BlockType, public readonly htmlPath: string | null = null) {
     super(message);
     this.name = "BlockDetectedError";
   }
