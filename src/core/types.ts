@@ -1,5 +1,6 @@
 export interface ProductItem {
   productId: string;
+  category: string;
   exactNames: string[];
   keywords: string[];
 }

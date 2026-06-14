@@ -8,18 +8,21 @@ import { randomScrollDwell, scrollToTop } from "../automation/scroll";
 import { moveMouseAlongCurveAndClick } from "../automation/mouse";
 import { buildSearchQuery, findTargetProduct, normalizeProductText, extractProductId } from "./search";
 import { assertNotBlocked } from "../core/blockDetection";
-import { recordQueryResult } from "../infra/db";
+import { recordQueryResult, logSession } from "../infra/db";
+import { ProxyEntry } from "../infra/proxyManager";
 
 export async function runCoupangSearchFlow(
   page: Page,
   target: ProductTarget,
-  excludeQueries: Set<string> = new Set()
+  excludeQueries: Set<string> = new Set(),
+  proxy: ProxyEntry | null,
+  profileDir: string
 ) {
   const triedQueries = new Set<string>(excludeQueries);
   let currentQuery: string | null = null;
 
   for (let i = 0; ; i++) {
-    const result = buildSearchQuery(target, triedQueries);
+    const result = await buildSearchQuery(target, triedQueries);
     if (!result) {
       throw new ProductNotFoundError(
         `검색 후보 쿼리 모두 소진 (시도: ${[...triedQueries].join(", ")})`,
@@ -52,7 +55,16 @@ export async function runCoupangSearchFlow(
     const productLink = await findTargetProduct(page, product);
 
     if (productLink) {
-      recordQueryResult(query, true);
+      await recordQueryResult(query, true);
+      await logSession({
+        jobId: null,
+        productId: product.productId,
+        category: product.category,
+        success: true,
+        blockType: null,
+        proxy,
+        profileDir,
+      });
       const [productPage] = await Promise.all([
         page.context().waitForEvent("page"),
         moveMouseAlongCurveAndClick(page, productLink),
@@ -64,7 +76,16 @@ export async function runCoupangSearchFlow(
       return;
     }
 
-    recordQueryResult(query, false);
+    await recordQueryResult(query, false);
+    await logSession({
+      jobId: null,
+      productId: product.productId,
+      category: product.category,
+      success: false,
+      blockType: null,
+      proxy,
+      profileDir,
+    });
     console.warn(`[Behavior] "${query}" 결과에서 타겟 상품 없음.`);
   }
 }

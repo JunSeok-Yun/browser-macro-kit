@@ -6,7 +6,6 @@ export const ENV = {
   USER_DATA_ROOT: path.resolve(process.cwd(), process.env.USER_DATA_ROOT ?? "./user-data-test"),
   SESSION_COUNT: parseInt(process.env.SESSION_COUNT ?? "10", 10),
   PROXY_FILE_PATH: path.resolve(process.cwd(), process.env.PROXY_FILE_PATH ?? "proxies.txt"),
-  DB_PATH: path.resolve(process.cwd(), process.env.DB_PATH ?? "./data/macro.db"),
   DEBUG_HTML_DIR: path.resolve(process.cwd(), process.env.DEBUG_HTML_DIR ?? "./debug-html"),
   HEADLESS:     process.env.HEADLESS === "true",
   NAVER_RATIO:  parseFloat(process.env.NAVER_RATIO ?? "0.5"),

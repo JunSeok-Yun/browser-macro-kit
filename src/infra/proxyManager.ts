@@ -14,11 +14,17 @@ export class ProxyManager {
   private watcher: fs.FSWatcher | null = null;
   private reloadTimer: NodeJS.Timeout | null = null;
 
-constructor(filePath: string = ENV.PROXY_FILE_PATH) {
+  private constructor(filePath: string) {
     this.filePath = filePath;
     this.reload();
-    this.loadBlacklistFromDb()
     this.watchFile();
+  }
+
+  // DB 조회(loadBlacklistFromDb)가 비동기라 생성자에서 처리할 수 없음 → 팩토리 메서드로 전환
+  static async create(filePath: string = ENV.PROXY_FILE_PATH): Promise<ProxyManager> {
+    const manager = new ProxyManager(filePath);
+    await manager.loadBlacklistFromDb();
+    return manager;
   }
 
   // 파일 파싱 함수
@@ -45,8 +51,8 @@ constructor(filePath: string = ENV.PROXY_FILE_PATH) {
   }
 
   // DB에 누적된 fail_count가 임계값 이상인 프록시를 블랙리스트에 반영
-  private loadBlacklistFromDb() {
-    const persisted = getBlacklistedProxies(ENV.PROXY_FAIL_THRESHOLD);
+  private async loadBlacklistFromDb() {
+    const persisted = await getBlacklistedProxies(ENV.PROXY_FAIL_THRESHOLD);
     persisted.forEach((key) => this.blacklist.add(key));
     if (persisted.size > 0) {
       console.log(`[ProxyManager] DB 기록 기반 블랙리스트 ${persisted.size}개 로드.`);
@@ -60,11 +66,11 @@ constructor(filePath: string = ENV.PROXY_FILE_PATH) {
 
     this.watcher = fs.watch(this.filePath, () => {
       if (this.reloadTimer) clearTimeout(this.reloadTimer);
-      this.reloadTimer = setTimeout(() => {
+      this.reloadTimer = setTimeout(async () => {
         console.log("[ProxyManager] 프록시 파일 변경 감지 → 리로드합니다.");
         this.blacklist.clear();
-        this.reload();      
-        resetProxyStats(); // proxy_stats 초기화 — IP 풀이 바뀌었으므로 과거 평가 무효화
+        this.reload();
+        await resetProxyStats(); // proxy_stats 초기화 — IP 풀이 바뀌었으므로 과거 평가 무효화
         console.log("[ProxyManager] proxy_stats 초기화 완료. 새 프록시 풀로 시작합니다.");
       }, 300);
     });
@@ -81,22 +87,17 @@ constructor(filePath: string = ENV.PROXY_FILE_PATH) {
   }
 
   // 실패 처리하기 위한 프록시 블랙리스트 추가 함수
-  markFailed(proxy: ProxyEntry): ProxyEntry | null {
+  async markFailed(proxy: ProxyEntry): Promise<ProxyEntry | null> {
     const key = `${proxy.host}:${proxy.port}`;
     this.blacklist.add(key);
-    recordProxyResult(proxy, true);
+    await recordProxyResult(proxy, true);
     console.warn(`[ProxyManager] ${key} 실패 처리. 남은 프록시: ${this.proxies.length - this.blacklist.size}개`);
     return this.getRandom();
   }
 
   // 성공 처리 — DB 기록만
-  markSuccess(proxy: ProxyEntry): void {
-    recordProxyResult(proxy, false);
-  }
-
-  // playwright 연동 함수
-  toPlaywright(proxy: ProxyEntry): { server: string } {
-    return { server: `http://${proxy.host}:${proxy.port}` };
+  async markSuccess(proxy: ProxyEntry): Promise<void> {
+    await recordProxyResult(proxy, false);
   }
 
   get count(): number {

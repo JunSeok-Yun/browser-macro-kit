@@ -2,10 +2,10 @@ import { Page, Locator } from "patchright";
 import { ProductTarget, ProductItem } from "../core/types";
 import { getQueryFailCount } from "../infra/db";
 
-export function buildSearchQuery(
+export async function buildSearchQuery(
   target: ProductTarget,
   exclude: Set<string> = new Set()
-): { query: string; product: ProductItem } | null {
+): Promise<{ query: string; product: ProductItem } | null> {
   const pairs: { query: string; product: ProductItem }[] = [];
 
   for (const product of target.products) {
@@ -23,7 +23,8 @@ export function buildSearchQuery(
 
   if (pairs.length === 0) return null;
   // fail_count가 낮을수록 선택 확률이 높아지는 가중 랜덤
-  const weights = pairs.map(p => 1 / (1 + getQueryFailCount(p.query)));
+  const failCounts = await Promise.all(pairs.map(p => getQueryFailCount(p.query)));
+  const weights = failCounts.map(failCount => 1 / (1 + failCount));
   const total = weights.reduce((sum, w) => sum + w, 0);
 
   let r = Math.random() * total;

@@ -6,6 +6,7 @@ export const DEFAULT_TARGET: ProductTarget = {
     { 
       // 실제 쿠팡에서 등록하는 제품 id
       productId: "9288498572",
+      category: "보쌈",
       // 실제 진만이 니가 등록한 상품명 
       exactNames: [
         "국내산 한돈 통 오겹살 저당 저칼로리 한방 보쌈 수육, 1개, 300g",
@@ -27,7 +28,8 @@ export const DEFAULT_TARGET: ProductTarget = {
       ] 
     },
     // { 
-    //   productId: "9052369498", 
+    //   productId: "9052369498",
+    //   category: "등갈비",
     //   exactNames: [
     //     "[잘나가는 미트] 국내산 한돈 돼지고기 등갈비 (냉동), 1개, 1kg",
     //     "[잘나가는 미트] 국내산 한돈 돼지고기 등갈비 (냉동), 2개, 1kg",

@@ -21,7 +21,7 @@ async function applyRecoveryPolicy(
   proxyManager: ProxyManager
 ): Promise<{ proxy: ProxyEntry | null; profileDir: string }> {
   if (policy.rotateProxy) {
-    proxy = proxyManager.markFailed(proxy)!;
+    proxy = (await proxyManager.markFailed(proxy))!;
   }
     if (policy.rotateProfile) {
     try {
@@ -42,7 +42,7 @@ async function main() {
   console.log("[메인] 가동 시작...");
   console.log(`[메인] 영구 프로필 경로: ${ENV.USER_DATA_ROOT}`);
 
-  const proxyManager = new ProxyManager();
+  const proxyManager = await ProxyManager.create();
   console.log(`[메인] 사용 가능한 프록시: ${proxyManager.count}개`);
 
   try {
@@ -87,14 +87,14 @@ async function runSession(proxyManager: ProxyManager): Promise<void> {
     let exhausted = false;
 
     try {
-      const result = await runPortalGateway(page, DEFAULT_TARGET, usedQueries);
+      const result = await runPortalGateway(page, DEFAULT_TARGET, usedQueries, proxy, profileDir);
       if (result) {
         console.log("[메인] 쿠팡 진입 성공!");
-        proxyManager.markSuccess(proxy!);
+        await proxyManager.markSuccess(proxy!);
         success = true;
       } else {
         console.warn(`[메인] 쿠팡 진입 실패. 프록시 ${proxy.host}:${proxy.port} 교체합니다.`);
-        proxy = proxyManager.markFailed(proxy);
+        proxy = await proxyManager.markFailed(proxy);
       }
     } catch (error) {
       if (error instanceof ProductNotFoundError) {
@@ -103,13 +103,13 @@ async function runSession(proxyManager: ProxyManager): Promise<void> {
         exhausted = true; // 차단 아님 → 프로필/프록시 교체 불필요
       } else if (error instanceof BlockDetectedError) {
         console.error(`[메인] 차단 감지 (${error.type}): ${error.message}`);
-        logBlock(proxy, error.type, error.message, error.htmlPath, profileDir);
+        await logBlock(proxy, error.type, error.message, error.htmlPath, profileDir);
 
         // HTTP_ERROR는 연속 횟수 기반 정책이라 정책 테이블보다 먼저 처리
         if (error.type === "HTTP_ERROR") {
           httpErrorStreak++;
           if (httpErrorStreak >= ENV.HTTP_ERROR_THRESHOLD) {
-            proxy = proxyManager.markFailed(proxy!);
+            proxy = await proxyManager.markFailed(proxy!);
             httpErrorStreak = 0;
           }
           // 프로필 유지, 정책 적용 없음
@@ -118,7 +118,7 @@ async function runSession(proxyManager: ProxyManager): Promise<void> {
         }
       } else {
         console.error(`[메인] 시도 ${i} 중 에러 발생:`, error);
-        proxy = proxyManager.markFailed(proxy!);
+        proxy = await proxyManager.markFailed(proxy!);
       }
     } finally {
       await context.close();
