@@ -5,7 +5,8 @@ Patchright 기반 브라우저 자동화 프로젝트. 포털 사이트(네이�
 코드 변경이 필요한 작업을 요청받으면, **직접 파일을 수정하지 말고** 사용자가 스스로 적용할 수 있도록 아래 형식으로 상세히 설명한다:
 
 - 파일 경로와 수정 위치(줄 번호 또는 함수명)를 명시
-- 변경 전(Before) / 변경 후(After) 코드를 diff처럼 비교 제시
+- 변경 전(Before) / 변경 후(After) 코드를 **각각 별도의 전체 코드 블록**으로 제시 (diff `+`/`-` 표기 대신, 변경 전 블록과 변경 후 블록을 통째로 따로 보여줄 것)
+- 한 파일 안에 여러 위치를 수정한다면 위치별로 Before/After 쌍을 나눠 제시
 - 각 변경마다 **왜** 이렇게 바꿔야 하는지 이유를 설명 (어떤 문제를 해결하는지, 어떤 부작용이 있는지/없는지)
 - 여러 파일에 걸친 변경이면 파일별로 섹션을 나누고, 마지막에 변경 파일 목록을 표로 정리
 
@@ -186,6 +187,8 @@ CREATE TABLE IF NOT EXISTS block_log (
   proxy_port  INTEGER,
   block_type  TEXT,
   message     TEXT,
+  html_path   TEXT,
+  profile_dir TEXT,
   occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -209,13 +212,15 @@ CREATE TABLE IF NOT EXISTS query_stats (
 
 - `proxies.txt`가 변경되면(`fs.watch`) 인메모리 블랙리스트 초기화 + `resetProxyStats()`로 `proxy_stats` 전체 삭제 — IP 풀 자체가 바뀌므로 과거 평가는 무효화. `block_log` / `query_stats`는 영구 누적(날짜별 이력 확인용)
 - DB GUI 확인: VS Code `SQLite Viewer` 확장 또는 `DB Browser for SQLite`로 `data/macro.db` 열람 가능
+- `html_path`/`profile_dir` 컬럼은 `PRAGMA table_info` 기반 마이그레이션으로 기존 DB에도 자동 추가됨 (2026-06-12)
 
 ### 4단계 - 운영 환경 검증 (예정)
 
 #### 안정성 / 인프라
 
 - [ ] VM(운영 환경)에서 반복 실행 안정성 검증
-- [ ] **프로필 폴더 EPERM 정리** — `AKAMAI_*` 차단 시 `fs.rmSync(profileDir, {recursive:true, force:true})`로 프로필 폴더를 삭제하는데, Windows에서 방금 닫은 Chrome 프로세스가 파일을 점유 중이면 `EPERM`이 발생하고 `force:true` 때문에 조용히 무시되어 폴더가 삭제되지 않고 남음 (현재 `user-data-test/`에 94개 누적 확인). 4단계 진입 전 기존 leftover 폴더 일괄 정리 (완료) + 삭제 실패 시 재시도/지연 로직 추가 필요
+- [x] **프로필 폴더 EPERM 재시도 (완료, 2026-06-12)** — `AKAMAI_*` 차단 시 `fs.rmSync(profileDir, {recursive:true, force:true})`로 프로필 폴더를 삭제하는데, Windows에서 방금 닫은 Chrome 프로세스가 파일을 점유 중이면 `EPERM`이 발생하고 `force:true` 때문에 조용히 무시되어 폴더가 삭제되지 않고 남던 문제. `applyRecoveryPolicy`의 `fs.rmSync`에 `maxRetries: 3, retryDelay: 300`(Node 내장 EBUSY/EPERM 재시도) 적용 완료 — leftover 재발 빈도는 운영 중 재확인
+- [ ] **`user-data-test/` 디스크 누적 (2026-06-12 분석)** — 52개 폴더 × 평균 ~70MB ≈ 3.6GB 확인. 원인: `newProfileDir()`이 세션마다 새 `{timestamp}` 폴더를 생성하고, `AKAMAI_*`/`SELECTOR_BUG`/`PORTAL_CAPTCHA`(rotateProfile) 차단 시에만 삭제됨 — 성공 세션이나 `PROXY_ERROR`/`HTTP_ERROR`로 끝난 세션의 프로필은 영구 leftover로 축적되고 재사용되지 않음. **해결책**: 아래 "프로필 풀 설계" 참고
 - [ ] **좀비 프로세스 정리** — headed 모드로 장시간 반복 실행 시 Chrome 프로세스가 메모리에 잔류하는지 우선 확인. 잔류가 확인되면 `taskkill /f /im chrome.exe` 주기 실행은 멀티 인스턴스 환경에서 다른 인스턴스의 브라우저까지 종료시키므로, `launchPersistentContext`가 반환하는 프로세스 PID 기반 종료로 대체 검토
 - [ ] **SQLite 타임스탬프 KST 통일** — `CURRENT_TIMESTAMP`는 UTC 기준 저장됨. `datetime('now', 'localtime')`로 교체 (DB를 PostgreSQL/MySQL로 바꿔도 동일하게 로컬 시간대 저장 여부 확인 필요)
 
@@ -234,7 +239,61 @@ CREATE TABLE IF NOT EXISTS query_stats (
 - [ ] **DB: SQLite → PostgreSQL 전환 여부** — 여러 인스턴스가 동시에 `data/macro.db`에 쓰기 시 `SQLITE_BUSY` 발생 가능. 대시보드 이전에 로깅 자체가 막히는 문제라 우선순위 높음. MySQL보다 PostgreSQL이 SQLite 문법과 유사해 마이그레이션 부담이 적음
 - [ ] **프록시 풀 동시 사용 조율** — 현재 DB 블랙리스트는 "실패한 IP"만 인스턴스 간 공유. 여러 인스턴스가 동시에 같은 IP를 선택하는 것을 막는 "사용 중" 상태 공유 메커니즘 없음
 - [ ] **인스턴스 간 행동 패턴 다양화** — 동일 VM/시간대에 여러 인스턴스가 비슷한 키워드·타이밍으로 동시 진입 시 패턴 탐지 위험 → 인스턴스별 타이밍 jitter, 키워드 분배 검토
-- [ ] **디스크 용량 누적 가속** — 프로필 폴더 leftover 문제(위 EPERM 항목)는 단일 인스턴스에서도 발생하지만, 인스턴스 수만큼 생성 속도가 배가되므로 멀티 인스턴스 전환 전 정리/재시도 로직 적용이 선행되어야 함
+- [ ] **디스크 용량 누적 가속** — 프로필 폴더 leftover 문제(위 항목)는 단일 인스턴스에서도 발생하지만, 인스턴스 수만큼 생성 속도가 배가됨. 아래 "프로필 풀 설계"로 해결 예정
+
+## 프로필 풀 설계 (2026-06-13 설계, 미적용)
+
+`user-data-test/` 디스크 누적 문제와 멀티 인스턴스 프로필 동시성을 함께 해결하기 위한 설계. 적용 시 `newProfileDir()`(`{timestamp}` 1회용 폴더) 방식을 폐기.
+
+- **고정 슬롯 6개**: `user-data-test/profile-0` ~ `profile-5`. 디스크 사용량이 항상 `6 × ~70MB`로 고정됨
+- **선택 방식**: 라운드로빈 — `profile_pool` 테이블(`slot, in_use, locked_at, last_used`)에서 `in_use=0`인 슬롯 중 `last_used`가 가장 오래된(또는 NULL) 슬롯을 선택. 6개 슬롯이 균등하게 재사용되어 "세션 간 `_abck` 누적" 설계 의도가 실제로 작동하게 됨 (현재는 매 세션 새 프로필이라 재사용 자체가 없었음)
+- **차단 시 로테이션**: `rotateProfile: true` 정책 발생 시, 슬롯 경로는 그대로 두고 폴더 내용만 `fs.rmSync` 후 빈 폴더로 재생성 (슬롯 번호는 증가하지 않음)
+- **멀티 인스턴스 동시성**: `in_use=1`인 슬롯은 다른 인스턴스가 선택 못 함. `locked_at`이 `PROFILE_LOCK_STALE_MS`(제안값 600000ms=10분)보다 오래되면 비정상 종료로 간주해 재사용 허용. 모든 슬롯이 사용 중이면 5초 대기 후 재시도
+- **`acquireProfileSlot(staleMs)` / `releaseProfileSlot(slot)`**: `infra/db.ts`에 추가 예정. `runSession()` 시작 시 슬롯 대여, `finally`에서 반납(반납 시 `last_used` 갱신)
+- **`_abck` 멀티 IP 우려**: 슬롯이 재사용되며 매번 다른 프록시 IP와 조합될 수 있음 — 단, 현재 구조에서도 한 세션 내 `PROXY_ERROR`/`HTTP_ERROR` 재시도 시 이미 발생하는 패턴이라 새로운 리스크는 아님. `block_log`의 `proxy_host`+`profile_dir`로 차단율과의 연관성을 운영 데이터로 모니터링 가능 (추가 스키마 변경 불필요)
+- **캐시 누적 (별개 이슈, 보류)**: 한 슬롯이 차단 없이 계속 성공하면 Chrome `Cache`/`Code Cache`/`GPUCache` 등이 무기한 누적될 수 있음 — 4단계 운영 중 슬롯별 폴더 크기 추이를 관찰해 필요 시 "쿠키/로컬스토리지는 유지하고 캐시 폴더만 주기적으로 정리"하는 경량 정리 로직 추가 검토
+- 적용 시 변경 파일: `.env`(`PROFILE_POOL_SIZE=6`, `PROFILE_LOCK_STALE_MS=600000`), `config/env.ts`, `infra/db.ts`(`profile_pool` 테이블 + 슬롯 함수), `index.ts`(`newProfileDir` → `profileDirForSlot`, 슬롯 대여/반납, `applyRecoveryPolicy` 반환 타입 단순화)
+
+## 5단계 - PostgreSQL 전환 및 운영 자동화 (계획, 2026-06-13)
+
+목표 처리량을 일 최대 1만회까지 염두에 두면서, 단독 실행 프로그램을 "웹 대시보드 + API 서버로 원격 제어/모니터링 가능한 시스템"으로 전환하는 단계. 진행 순서: ①PostgreSQL 전환 → ②스키마 확장(`category`/`session_log`/`jobs`) → ③Job 기반 실행 흐름(`index.ts` 리팩토링) → ④API 서버 → ⑤웹 대시보드.
+
+### ① DB: SQLite → PostgreSQL
+- 운영 VM에 PostgreSQL 설치, **개발도 같은 VM에서 진행하므로 별도 dev DB 불필요** (현재도 VM에 VS Code로 직접 개발 중)
+- pgAdmin으로 GUI 확인 가능
+- 기존 4개 테이블(`block_log`, `proxy_stats`, `query_stats`, 프로필 풀 적용 시 `profile_pool`)을 거의 그대로 이전 — 1차 목표는 동시 쓰기 병목 해소
+
+### ② 스키마 확장
+- **`category` 필드**: `core/types.ts`의 `ProductItem`에 `category: string` 추가 (예: `productId: "9288498572"` → `category: "보쌈"`). `config/target.ts`의 `DEFAULT_TARGET`에도 반영
+- **`session_log` 테이블 신설**: 현재 `block_log`는 실패만 기록 — 대시보드에서 "전체/항목별 성공·실패 횟수"를 보여주려면 성공도 기록 필요. 컬럼(안): `id, job_id, product_id, category, success, block_type(nullable), proxy_host, proxy_port, profile_slot, occurred_at`
+- **`jobs` 테이블 신설**: 웹에서 "카테고리 + 횟수"(예: 보쌈, 3000) 요청 시 생성. 컬럼(안): `id, category, target_count, completed_count, status(running/done), created_at`
+
+### ③ 실행 흐름 — Job 기반 + LISTEN/NOTIFY (polling 아님)
+- 현재: `main()`이 `ENV.SESSION_COUNT`만큼 무조건 반복, `DEFAULT_TARGET` 전체 product 대상
+- 변경: 각 인스턴스가 시작 시 `LISTEN job_created`로 DB 커넥션을 열어두고 **idle 대기** (요청 없으면 DB 부하 0)
+  - API 서버가 `jobs`에 INSERT 시 `NOTIFY job_created` → 대기 중인 인스턴스들이 즉시 깨어남
+  - 깨어난 인스턴스는 해당 Job의 `category`에 속하는 product만 대상으로 `runSession` 반복, 매 회 `UPDATE jobs SET completed_count = completed_count + 1`(원자적 증가)
+  - `completed_count >= target_count` 도달 시 `status='done'` 처리 후 다시 idle `LISTEN` 상태로 복귀
+- **동시 Job 거부**: `POST /jobs` 시 API 서버가 `status='running'`인 Job 존재 여부 확인 → 있으면 INSERT 없이 즉시 에러(409) 반환
+- **예상 종료시간 응답**: Job 등록 성공 시 `estimatedFinishAt = now + (target_count / 활성 인스턴스 수) × 평균 세션 소요시간`(최근 `session_log` 기준)을 응답에 포함
+
+### ④ API 서버
+- API 서버와 매크로 인스턴스는 **직접 통신하지 않고 PostgreSQL을 매개로만 연결** — API 서버는 인스턴스 수/위치를 몰라도 됨, 인스턴스 증감 시 API 서버 코드 변경 불필요
+- 엔드포인트(안): `POST /jobs {category, count}`, `GET /jobs`, `GET /stats`(전체/항목별 성공·실패), `GET /logs`(`session_log`/`block_log` 기반)
+- 프레임워크: Express/Fastify
+
+### ⑤ 웹 대시보드
+- **옵션 C 확정**: 분리형 SPA(React + Vite) + 독립 API 서버 — 역할 분리 명확. CORS 설정 필요
+- 화면: 전체/항목별 성공·실패 횟수, 실패 로그, Job 등록 폼(카테고리+횟수), 진행률/예상 종료시간
+
+### 외부 접속
+- API 서버 + 프론트엔드 빌드 결과물 모두 운영 VM에서 호스팅 (Nginx 리버스 프록시로 `/api/*`는 API 서버, 나머지는 정적 파일)
+- 운영 VM은 HaiIP 제공 원격 데스크톱(`49.254.214.117:10389` → 내부 RDP, NAT/포트포워딩 구조) — 웹 서비스용 포트도 동일하게 HaiIP에 포워딩 요청 필요
+  - 80번 포워딩 가능 시: `http://도메인` 그대로 사용 가능
+  - 임의 포트만 가능 시: `http://도메인:포트`처럼 URL에 포트 명시 필요 (RDP의 `:10389`와 동일 패턴)
+  - **포트포워딩 자체가 불가능하면 Cloudflare Tunnel**(무료, `cloudflared`로 VM이 아웃바운드 연결만 사용 — HaiIP 설정 변경 불필요, HTTPS 자동 적용) 사용
+- 도메인: 가비아 구매 또는 무료 DNS — Cloudflare Tunnel 사용 시 네임서버를 Cloudflare로 이전
+- Postgres(5432)는 외부 포트포워딩/터널 대상에서 제외, 내부 전용으로 유지
 
 ## 테스트 결과 및 현황 (2026-06-09 기준)
 
@@ -391,13 +450,17 @@ npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
 
 ## 보류 작업
 
-- [ ] (보류)`AKAMAI_CHALLENGE`(`iframe[src*="challenge"]`, `#px-captcha`) / `PORTAL_CAPTCHA`(`#captcha_img`, `.captcha_wrap`, `/sorry/` 등) 셀렉터는 모두 추정값 — 실제 차단/캡차 화면 캡처 후 보정 필요
 - [ ] (보류) `query_stats` 키가 `query` 단독이라 brand 단독 쿼리가 여러 `product`와 페어링될 때 통계가 섞임 — `(query, productId)` 복합키 전환은 운영 데이터 확인 후 재검토
 
 ## 다음 작업
 
-> 3단계(메인 루프 및 예외 처리, SQLite 연동, `applyRecoveryPolicy` 분리) + 3.1단계(구글 게이트웨이 안정화, AKAMAI_BLOCK 감지 보정, 12세션 무사고 검증) 구현 완료 (2026-06-11). 아래 작업 후 4단계 진입.
+> 3단계(메인 루프 및 예외 처리, SQLite 연동, `applyRecoveryPolicy` 분리) + 3.1단계(구글 게이트웨이 안정화, AKAMAI_BLOCK 감지 보정, 12세션 무사고 검증) 구현 완료 (2026-06-11). `SELECTOR_BUG` 오분류 수정 + HTML 캡처 + `profile_dir` 컬럼 + EPERM 재시도까지 적용 완료 (2026-06-12).
 
-- `AKAMAI_CHALLENGE` / `PORTAL_CAPTCHA` 셀렉터 보정 — 실제 차단/캡차 화면 캡처 후 `core/blockDetection.ts`의 추정 셀렉터 검증
+- [x] **`SELECTOR_BUG` 오분류 수정 (2026-06-12)** — `assertNotBlocked`(`core/blockDetection.ts`)의 검사 순서를 `AKAMAI_CHALLENGE → AKAMAI_BLOCK(bodyText) → COUPANG_APP_BLOCK → SELECTOR_BUG(url)`로 재배치. `link.coupang.com`에 머물러 있어도 본문에 차단 시그니처가 있으면 `AKAMAI_BLOCK`(프록시+프로필 교체)으로 먼저 분류됨
+- [x] **차단 발생 시 HTML 캡처 (2026-06-12)** — `infra/debugCapture.ts`의 `saveDebugHtml()` + `core/blockDetection.ts`의 `captureAndThrow()`로 `BlockDetectedError` 발생 직전 `page.content()`를 `debug-html/{BlockType}_{timestamp}.html`로 저장, `block_log.html_path`에 경로 기록
+- [x] **`block_log.profile_dir` 컬럼 추가 (2026-06-12)** — `logBlock(proxy, type, message, htmlPath, profileDir)`로 시그니처 확장. "프로필 유지 + IP 교체 직후 `AKAMAI_BLOCK`/`AKAMAI_CHALLENGE` 발생" 빈도를 운영 로그로 검증 가능해짐 (운영 데이터 누적 필요)
+- `AKAMAI_CHALLENGE` / `PORTAL_CAPTCHA` 셀렉터 보정 — `debug-html/`에 캡처된 실제 차단/캡차 화면으로 `core/blockDetection.ts`의 추정 셀렉터 검증 (운영 데이터 누적 필요)
 - (보류) `query_stats` 키를 `(query, productId)` 복합키로 분리 검토 — 운영 데이터 누적 후 재검토
+- **프로필 풀 구조 적용 (설계 완료, 미적용)** — "프로필 풀 설계" 섹션 참고. 디스크 누적 문제와 멀티 인스턴스 프로필 동시성을 함께 해결
 - **4단계**: VM 반복 실행 안정성 검증
+- **5단계**: PostgreSQL 전환 + Job/API/웹 대시보드 (계획, 아래 "5단계" 섹션 참고)
