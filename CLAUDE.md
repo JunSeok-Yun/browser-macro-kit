@@ -23,7 +23,7 @@ Patchright 기반 브라우저 자동화 프로젝트. 포털 사이트(네이�
 
 ```
 src/
-  index.ts              - 메인 진입점. 세션 재시도 루프, usedQueries 누적 관리
+  index.ts              - 메인 진입점. Job 기반 idle 루프(LISTEN/NOTIFY), 세션 재시도, 프로필 슬롯 관리
   runDiagnostics.ts     - 진단 전용 진입점 (creepjs | pixelscan)
   utils.ts              - 공통 유틸리티 (sleep)
 
@@ -40,7 +40,8 @@ src/
   infra/
     browser.ts          - 영구 브라우저 컨텍스트 팩토리 (createPersistentContext(proxy, profileDir))
     proxyManager.ts     - HaiIP 유동IP 연동 모듈 (ProxyManager.create() 비동기 팩토리, 인메모리+DB 이중 블랙리스트)
-    db.ts               - PostgreSQL 연동 (pg, Pool) — block_log/proxy_stats/query_stats/session_log/jobs
+    db.ts               - PostgreSQL 연동 (pg, Pool) — block_log/proxy_stats/query_stats/session_log/jobs/profile_pool
+    debugCapture.ts     - 차단/진단 시점 페이지 HTML 저장 (saveDebugHtml(html, type) → debug-html/{type}_{timestamp}.html)
 
   automation/
     keyboard.ts         - 인간형 타이핑 (typeLikeHuman, clearSearchInput)
@@ -159,15 +160,12 @@ interface ProductTarget {
 - [x] SQLite 도입 (`better-sqlite3`, `infra/db.ts`) — `block_log` / `proxy_stats` / `query_stats`
 - [x] `query_stats` 기반 가중 랜덤 — `buildSearchQuery`가 `fail_count` 낮은 쿼리를 우선 선택
 - [x] `BlockType`에 `PORTAL_CAPTCHA` 추가 (7종) — 네이버/구글 자체의 봇 차단(캡차, 비정상 트래픽)을 Akamai 차단과 별도로 분류
-- [x] `PROXY_ERROR` / `HTTP_ERROR` 분류 구현 — `core/blockDetection.ts`에 `classifyNavigationError`(에러 메시지 패턴 매칭) / `safeGoto`(goto 래퍼, 5xx는 `assertResponseOk`로 검사) / `withNavigationErrorHandling`(goto 외 탐색 동작용) 추가. `gateway/naver.ts`·`google.ts`의 모든 `page.goto()`를 `safeGoto`로, 클릭 후 대기는 `withNavigationErrorHandling`으로 교체
+- [x] `PROXY_ERROR` / `HTTP_ERROR` 분류 구현 — `classifyNavigationError`/`safeGoto`/`withNavigationErrorHandling` 추가 (상세: 아래 "주요 설계 결정" 참고). `gateway/naver.ts`·`google.ts`의 모든 `page.goto()`를 `safeGoto`로, 클릭 후 대기는 `withNavigationErrorHandling`으로 교체
 - [x] `assertPortalNotBlocked(page, portal)` — 네이버 캡차(`#captcha_img` 등) / 구글 `/sorry/`·reCAPTCHA 감지, `gateway/naver.ts`·`google.ts`의 검색 직후 호출
 - [x] `main().catch((err) => { console.error(err); process.exit(1); })` 추가 — unhandled rejection 방지
 - [x] `core/recovery.ts` `BLOCK_RECOVERY` 정책 테이블 신규 — `BlockType → { rotateProxy, rotateProfile, extraDelayMs?, terminal? }`. `index.ts`의 28줄 switch문을 정책 조회+실행으로 단순화. `HTTP_ERROR`는 연속 횟수(`httpErrorStreak`) 기반이라 정책 테이블 조회 전에 별도 분기 처리
 - [x] `applyRecoveryPolicy` 헬퍼 함수 추출 (2026-06-11) — `index.ts`의 정책 실행부(`rotateProxy`/`rotateProfile`/`extraDelayMs` 3개 if문)를 `applyRecoveryPolicy(policy, proxy, profileDir, proxyManager): Promise<{ proxy, profileDir }>`로 분리. `terminal` 분기만 메인 루프에 남김
 - [x] `runDiagnostics.ts` 컴파일 에러 수정 (2026-06-11) — 3단계 리팩토링(`USER_DATA_DIR`→`USER_DATA_ROOT` 이름 변경, `createPersistentContext(proxy, profileDir)` 시그니처 변경)이 반영되지 않아 발생한 누락분 수정. 진단용 1회성 스크립트라 프로필 로테이션 없이 `ENV.USER_DATA_ROOT`를 그대로 `profileDir`로 사용
-
-#### 남은 작업
-
 
 ### 3.1단계 - 구글 게이트웨이 안정화 및 AKAMAI_BLOCK 감지 보정 (완료, 2026-06-11)
 
@@ -177,13 +175,29 @@ interface ProductTarget {
 - [x] `gateway/google.ts` 디버그 로그(`debugHref`/`debugTarget`/`debugAncestorHtml`) 제거 — 광고 링크 클릭→`link.coupang.com`→`coupang.com` 리다이렉트 정상 동작을 12세션에 걸쳐 4회 검증 완료
 - [x] **검증**: `USER_DATA_ROOT`를 `./user-data-test`, `./user` 두 값으로 각 6세션(총 12세션) 실행 — **AKAMAI_BLOCK 0건**, 전부 성공(1건 PORTAL_CAPTCHA는 정책대로 프록시 교체 후 재시도 성공). 두 프로필 루트 모두 결과 동일 → 프로필 경로 자체는 차단과 무관함을 확인 (아래 "주요 설계 결정" 참고)
 
+### 3.2단계 - 디버그 캡처 및 네트워크 에러 처리 보강 (완료, 2026-06-15)
+
+- [x] **`NAVER_NO_LINK`/`GOOGLE_NO_LINK` HTML 캡처 추가** — `gateway/naver.ts`/`google.ts`의 "매칭된 링크 요소 개수: 0개" 분기에서 `saveDebugHtml(html, "NAVER_NO_LINK" | "GOOGLE_NO_LINK")` 호출 후 에러 메시지에 HTML 경로 포함. `infra/debugCapture.ts`의 `saveDebugHtml` 시그니처를 `type: BlockType` → `type: string`으로 확장(차단 외 진단용 타입도 저장 가능). 정상적으로 상품을 찾는 경우엔 호출되지 않음 — 검증: `debug-html/NAVER_NO_LINK_*.html` 캡처 정상 동작 확인
+- [x] **`PROXY_ERROR_PATTERNS`에 `"ERR_TIMED_OUT"` 추가** — `core/blockDetection.ts`. 기존 패턴(`ERR_CONNECTION_TIMED_OUT`, `Timeout`)이 실제 Chrome 에러 문자열 `net::ERR_TIMED_OUT`과 매칭되지 않아 `classifyNavigationError`가 분류 실패 → 원인 불명 `Error`로 떨어져 `block_log`에 기록되지 않던 문제 수정. 이제 `[메인] 차단 감지 (PROXY_ERROR): ...`로 정상 분류·기록됨
+- [x] **`gateway/naver.ts`/`google.ts` 포털 첫 진입 `waitUntil: "load"` → `"domcontentloaded"`** — 멀티 인스턴스 동시 실행 시 naver.com/google.com `page.goto()`가 `load` 이벤트까지 대기하다 타임아웃되는 빈도를 줄이기 위한 조치. 적용 후에도 `ERR_TIMED_OUT` 발생 빈도 자체는 유의미하게 줄지 않음 — 원인이 page-load 단계가 아닌 더 앞단(프록시/VPN 연결 수립)일 가능성이 높아 "다음 작업"으로 이전
+- [x] **`assertNotBlocked`의 "Execution context was destroyed" 레이스 컨디션 처리** — `core/blockDetection.ts`. `domcontentloaded` 직후 Akamai 스크립트가 추가 navigation을 일으키면 `locator.count()` 중 페이지 컨텍스트가 파괴되어 `Error: locator.count: Execution context was destroyed` 발생 → `BlockDetectedError`가 아닌 일반 에러로 빠져 `block_log` 미기록 + 원인 불명 프록시 교체로 처리되던 문제. 검사 로직을 `assertNotBlockedOnce`로 분리하고, 해당 에러 캐치 시 `waitForLoadState("domcontentloaded")` 후 1회 재검사 → `AKAMAI_CHALLENGE`/`AKAMAI_BLOCK`으로 정상 분류되거나 통과
+- [x] **검증 (단일 인스턴스)**: Job 11(보쌈, target 5) 5/5 성공, `AKAMAI_BLOCK` 1회는 정책대로 프록시+프로필 교체 후 재시도 성공. `Execution context was destroyed`는 재발하지 않음 — 단, 발생 자체가 확률적(레이스 컨디션)이라 1회 정상 실행만으로 수정 효과를 확정할 수는 없음, 재발 시 재확인 필요
+
+### 3.3단계 - 프로필 캐시 정리 / 광고 미노출 분리 / Job 종료시각 (완료, 2026-06-15)
+
+- [x] **`clearProfileCache` 추가** — `infra/browser.ts`. 세션 종료마다(`finally`) `Default/Cache`, `Code Cache`, `GPUCache` 등 9개 캐시 폴더만 삭제하고 `Cookies`/`Local Storage`(`_abck` 등 추적 쿠키)는 보존. 캐시가 프로필 용량의 대부분을 차지하므로 매번 정리해도 Akamai 신뢰도에 영향 없음 — 용량 임계값 기반 조건부 정리 불필요
+- [x] **`NoLinkFoundError` 신설** — `core/errors.ts`. `NAVER_NO_LINK`/`GOOGLE_NO_LINK`(검색 결과에 쿠팡 링크 없음)를 캡처 HTML 분석 결과 "셀렉터 버그"가 아닌 "광고 미노출"로 재해석(정상 페이지인데 `coupang` 문자열 자체가 없음). `index.ts`에서 프록시/프로필을 그대로 두고 재시도만 수행 — 정상 프록시가 차단으로 오인되어 블랙리스트되던 문제 해결
+- [x] **`completeJob`의 `finished_at` 미기록 수정** — `infra/db.ts`. `status='done'`만 갱신하고 `finished_at`(기존 컬럼)을 빼먹어 항상 `NULL`이던 버그. `finished_at = now()` 추가
+- [x] **멀티 인스턴스(3개) 재검증** — 프로필 슬롯 충돌 없음, `completed_count`가 `target_count`를 소폭 초과(10/8, 14/12)하는 기존 문서화 트레이드오프 재확인
+- [x] **단일 vs 멀티 인스턴스 지연 비교** — 단일 인스턴스 세션당 ~45~52초(기존 56~57초 기준과 동등 이상, 이번 세션의 신규 코드로 인한 지연 없음 확인) vs 3개 동시 실행 시 ~69~74초. **지연 증가 원인은 멀티 인스턴스 리소스 경쟁**(기존부터 존재하던 현상)으로 확인 — 코드 회귀 아님
+
 ### 4단계 - 운영 환경 검증 (예정)
 
 #### 안정성 / 인프라
 
 - [ ] VM(운영 환경)에서 반복 실행 안정성 검증
 - [x] **프로필 폴더 EPERM 재시도 (완료, 2026-06-12)** — `AKAMAI_*` 차단 시 `fs.rmSync(profileDir, {recursive:true, force:true})`로 프로필 폴더를 삭제하는데, Windows에서 방금 닫은 Chrome 프로세스가 파일을 점유 중이면 `EPERM`이 발생하고 `force:true` 때문에 조용히 무시되어 폴더가 삭제되지 않고 남던 문제. `applyRecoveryPolicy`의 `fs.rmSync`에 `maxRetries: 3, retryDelay: 300`(Node 내장 EBUSY/EPERM 재시도) 적용 완료 — leftover 재발 빈도는 운영 중 재확인
-- [ ] **`user-data-test/` 디스크 누적 (2026-06-12 분석)** — 52개 폴더 × 평균 ~70MB ≈ 3.6GB 확인. 원인: `newProfileDir()`이 세션마다 새 `{timestamp}` 폴더를 생성하고, `AKAMAI_*`/`SELECTOR_BUG`/`PORTAL_CAPTCHA`(rotateProfile) 차단 시에만 삭제됨 — 성공 세션이나 `PROXY_ERROR`/`HTTP_ERROR`로 끝난 세션의 프로필은 영구 leftover로 축적되고 재사용되지 않음. **해결책**: 아래 "프로필 풀 설계" 참고
+- [x] **`user-data-test/` 디스크 누적 (완료, 2026-06-14)** — 52개 폴더 × 평균 ~70MB ≈ 3.6GB까지 쌓였던 문제. `newProfileDir()`(세션마다 새 `{timestamp}` 폴더) 방식을 폐기하고 "프로필 풀"(고정 슬롯 6개 재사용)로 전환해 디스크 사용량을 `6 × ~70MB`로 고정. 기존 leftover 폴더는 수동 정리 필요
 - [ ] **좀비 프로세스 정리** — headed 모드로 장시간 반복 실행 시 Chrome 프로세스가 메모리에 잔류하는지 우선 확인. 잔류가 확인되면 `taskkill /f /im chrome.exe` 주기 실행은 멀티 인스턴스 환경에서 다른 인스턴스의 브라우저까지 종료시키므로, `launchPersistentContext`가 반환하는 프로세스 PID 기반 종료로 대체 검토
 - [x] **타임스탬프 KST 통일 (완료, 2026-06-14)** — PostgreSQL 전환과 함께 `ALTER DATABASE macro_kit SET timezone TO 'Asia/Seoul';`로 해결. `TIMESTAMPTZ` + `now()`는 절대 시각을 저장하고, DB 세션 타임존 설정에 따라 pgAdmin/psql에서 KST로 표시됨
 
@@ -202,22 +216,25 @@ interface ProductTarget {
 - [x] **DB: SQLite → PostgreSQL 전환 (완료, 2026-06-14)** — 아래 "5단계" 섹션 참고
 - [ ] **프록시 풀 동시 사용 조율** — 현재 DB 블랙리스트는 "실패한 IP"만 인스턴스 간 공유. 여러 인스턴스가 동시에 같은 IP를 선택하는 것을 막는 "사용 중" 상태 공유 메커니즘 없음
 - [ ] **인스턴스 간 행동 패턴 다양화** — 동일 VM/시간대에 여러 인스턴스가 비슷한 키워드·타이밍으로 동시 진입 시 패턴 탐지 위험 → 인스턴스별 타이밍 jitter, 키워드 분배 검토
-- [ ] **디스크 용량 누적 가속** — 프로필 폴더 leftover 문제(위 항목)는 단일 인스턴스에서도 발생하지만, 인스턴스 수만큼 생성 속도가 배가됨. 아래 "프로필 풀 설계"로 해결 예정
+- [x] **디스크 용량 누적 가속 (완료, 2026-06-14)** — 프로필 풀 적용으로 인스턴스 수와 무관하게 디스크 사용량이 고정 슬롯 수만큼으로 제한됨
 
-## 프로필 풀 설계 (2026-06-13 설계, 미적용)
+## 프로필 풀 (완료, 2026-06-14)
 
-`user-data-test/` 디스크 누적 문제와 멀티 인스턴스 프로필 동시성을 함께 해결하기 위한 설계. 적용 시 `newProfileDir()`(`{timestamp}` 1회용 폴더) 방식을 폐기.
+`user-data-test/` 디스크 누적과 멀티 인스턴스 프로필 동시성 문제를 해결하기 위해 `newProfileDir()`(`{timestamp}` 1회용 폴더) 방식을 폐기하고 고정 슬롯 재사용 방식으로 전환.
 
-- **고정 슬롯 6개**: `user-data-test/profile-0` ~ `profile-5`. 디스크 사용량이 항상 `6 × ~70MB`로 고정됨
-- **선택 방식**: 라운드로빈 — `profile_pool` 테이블(`slot, in_use, locked_at, last_used`)에서 `in_use=0`인 슬롯 중 `last_used`가 가장 오래된(또는 NULL) 슬롯을 선택. 6개 슬롯이 균등하게 재사용되어 "세션 간 `_abck` 누적" 설계 의도가 실제로 작동하게 됨 (현재는 매 세션 새 프로필이라 재사용 자체가 없었음)
-- **차단 시 로테이션**: `rotateProfile: true` 정책 발생 시, 슬롯 경로는 그대로 두고 폴더 내용만 `fs.rmSync` 후 빈 폴더로 재생성 (슬롯 번호는 증가하지 않음)
-- **멀티 인스턴스 동시성**: `in_use=1`인 슬롯은 다른 인스턴스가 선택 못 함. `locked_at`이 `PROFILE_LOCK_STALE_MS`(제안값 600000ms=10분)보다 오래되면 비정상 종료로 간주해 재사용 허용. 모든 슬롯이 사용 중이면 5초 대기 후 재시도
-- **`acquireProfileSlot(staleMs)` / `releaseProfileSlot(slot)`**: `infra/db.ts`에 추가 예정. `runSession()` 시작 시 슬롯 대여, `finally`에서 반납(반납 시 `last_used` 갱신)
-- **`_abck` 멀티 IP 우려**: 슬롯이 재사용되며 매번 다른 프록시 IP와 조합될 수 있음 — 단, 현재 구조에서도 한 세션 내 `PROXY_ERROR`/`HTTP_ERROR` 재시도 시 이미 발생하는 패턴이라 새로운 리스크는 아님. `block_log`의 `proxy_host`+`profile_dir`로 차단율과의 연관성을 운영 데이터로 모니터링 가능 (추가 스키마 변경 불필요)
-- **캐시 누적 (별개 이슈, 보류)**: 한 슬롯이 차단 없이 계속 성공하면 Chrome `Cache`/`Code Cache`/`GPUCache` 등이 무기한 누적될 수 있음 — 4단계 운영 중 슬롯별 폴더 크기 추이를 관찰해 필요 시 "쿠키/로컬스토리지는 유지하고 캐시 폴더만 주기적으로 정리"하는 경량 정리 로직 추가 검토
-- 적용 시 변경 파일: `.env`(`PROFILE_POOL_SIZE=6`, `PROFILE_LOCK_STALE_MS=600000`), `config/env.ts`, `infra/db.ts`(`profile_pool` 테이블 + 슬롯 함수), `index.ts`(`newProfileDir` → `profileDirForSlot`, 슬롯 대여/반납, `applyRecoveryPolicy` 반환 타입 단순화)
+- **고정 슬롯**: `{USER_DATA_ROOT}/profile-0` ~ `profile-5` (6개) — 폴더 개수가 6개로 고정되어 디스크 사용량이 `6 × ~70MB`(관찰된 평균치) 수준으로 수렴. 70MB는 강제 상한이 아닌 추정치이며, 용량 기준 자동 정리 로직은 없음(아래 보류 이슈 참고)
+- **`profile_pool` 테이블** (`slot, in_use, locked_at, last_used`, pgAdmin에서 수동 생성+시드): `acquireProfileSlot(staleMs)`이 `in_use=false` 또는 `locked_at`이 `PROFILE_LOCK_STALE_MS`(기본 10분)보다 오래된 슬롯 중 `last_used`가 가장 오래된(NULL 우선) 슬롯을 `FOR UPDATE SKIP LOCKED`로 원자적 점유, `releaseProfileSlot(slot)`이 반납 + `last_used` 갱신 — 라운드로빈으로 슬롯이 균등 재사용되어 "세션 간 `_abck` 누적" 설계 의도가 실제로 작동
+- **차단 시 로테이션**: `rotateProfile: true`여도 슬롯 번호는 유지, 폴더 내용만 `fs.rmSync` 후 재생성
+- **모든 슬롯 사용 중**: `acquireProfileSlotWithRetry`가 5초 대기 후 재시도
+- `runSession()`이 시작 시 슬롯을 점유하고 `finally`에서 항상 반납 (슬롯 누수 방지)
+- **검증 (단일 인스턴스)**: Job 1건 실행 → `profile-0` 점유(`locked_at` 기록) → 성공 후 반납(`in_use=false`, `last_used` 갱신), 다음 Job은 `last_used=NULL`인 `profile-1`을 우선 선택(라운드로빈 정상)
+- **DB 권한 주의**: pgAdmin(superuser)에서 새 테이블 생성 시 `macro_app` 롤에 `GRANT`가 자동으로 부여되지 않음 — `profile_pool` 첫 사용 시 `permission denied` 발생, `GRANT SELECT, INSERT, UPDATE, DELETE ON profile_pool TO macro_app;`로 해결. 향후 신규 테이블에도 동일하게 적용 필요
+- **남은 검증**: 멀티 인스턴스 동시 실행 시 슬롯 충돌 없이 분배되는지 (4단계 멀티 인스턴스 검증에서 진행)
+- **보류 이슈**: 슬롯 재사용 시 `_abck`가 매번 다른 프록시 IP와 조합될 수 있음(기존에도 있던 패턴, 새 리스크 아님)
+- **캐시 폴더 누적 (완료, 2026-06-15)** — `clearProfileCache`(`infra/browser.ts`)가 세션 종료마다 `Default/Cache` 등 캐시 폴더를 정리, `_abck` 등 추적 쿠키는 보존 (3.3단계 참고)
+- 적용 파일: `.env`/`config/env.ts`(`PROFILE_LOCK_STALE_MS`), `infra/db.ts`(`acquireProfileSlot`/`releaseProfileSlot`), `index.ts`(`profileDirForSlot`, `acquireProfileSlotWithRetry`, `applyRecoveryPolicy` 반환 타입 단순화)
 
-## 5단계 - PostgreSQL 전환 및 운영 자동화 (① ② 완료 2026-06-14, ③~⑤ 계획)
+## 5단계 - PostgreSQL 전환 및 운영 자동화 (①②③ 완료 2026-06-14, ④⑤ 계획)
 
 목표 처리량을 일 최대 1만회까지 염두에 두면서, 단독 실행 프로그램을 "웹 대시보드 + API 서버로 원격 제어/모니터링 가능한 시스템"으로 전환하는 단계. 진행 순서: ①PostgreSQL 전환 → ②스키마 확장(`category`/`session_log`/`jobs`) → ③Job 기반 실행 흐름(`index.ts` 리팩토링) → ④API 서버 → ⑤웹 대시보드.
 
@@ -233,21 +250,24 @@ interface ProductTarget {
 
 ### ② 스키마 확장 (완료, 2026-06-14)
 - **`category` 필드**: `core/types.ts`의 `ProductItem`에 `category: string` 추가 — `productId: "9288498572"`(보쌈)에 `category: "보쌈"` 적용, `config/target.ts`의 `DEFAULT_TARGET`에도 반영 (등갈비 상품은 주석 처리된 상태로 `category: "등갈비"` 추가)
-- **`session_log` 테이블**: `block_log`는 실패만 기록하므로, 성공도 포함한 "상품별 성공/실패 횟수" 조회를 위해 신설. 컬럼: `id, job_id, product_id, category, success, block_type(nullable), proxy_host, proxy_port, profile_dir, occurred_at`. `coupang/flow.ts`의 `runCoupangSearchFlow`에서 상품 발견/미발견 시점마다 `infra/db.ts`의 `logSession()` 호출 — `GROUP BY product_id, category` + `COUNT(*) FILTER (WHERE success)`로 항목별 성공/실패 집계 가능
+- **`session_log` 테이블**: `block_log`는 실패만 기록하므로, 성공도 포함한 "상품별 성공/실패 횟수" 조회를 위해 신설. 컬럼: `id, job_id, product_id, category, exact_name(nullable), success, block_type(nullable), proxy_host, proxy_port, profile_dir, occurred_at`. `coupang/flow.ts`의 `runCoupangSearchFlow`에서 상품 발견/미발견 시점마다 `infra/db.ts`의 `logSession()` 호출 — `GROUP BY product_id, category` + `COUNT(*) FILTER (WHERE success)`로 항목별 성공/실패 집계 가능
+- **`exact_name` 컬럼 추가 (완료, 2026-06-14)** — `findTargetProduct`가 매칭에 성공한 `exactNames` 옵션 문자열(예: "국내산 한돈 통 오겹살 저당 저칼로리 한방 보쌈 수육, 1개, 300g")을 `{ locator, matchedName }` 형태로 반환하고, `runCoupangSearchFlow`가 이를 `logSession`에 전달. 실패 시(`exactIndex` 미발견)는 `null`. `GROUP BY product_id, exact_name` + `COUNT(*) FILTER (WHERE success)`로 옵션별 성공 횟수 집계 가능
 - **`jobs` 테이블**: 웹에서 "카테고리 + 횟수"(예: 보쌈, 3000) 요청 시 생성될 예정. 컬럼: `id, category, target_count, completed_count, status(running/done), created_at`. `idx_jobs_one_running` 유니크 인덱스(`CREATE UNIQUE INDEX ... ON jobs (status) WHERE status = 'running'`)로 동시 실행 Job을 DB 레벨에서 1개로 제한 (③ 구현 시 활용)
 
-### ③ 실행 흐름 — Job 기반 + LISTEN/NOTIFY (polling 아님)
-- 현재: `main()`이 `ENV.SESSION_COUNT`만큼 무조건 반복, `DEFAULT_TARGET` 전체 product 대상
-- 변경: 각 인스턴스가 시작 시 `LISTEN job_created`로 DB 커넥션을 열어두고 **idle 대기** (요청 없으면 DB 부하 0)
-  - API 서버가 `jobs`에 INSERT 시 `NOTIFY job_created` → 대기 중인 인스턴스들이 즉시 깨어남
-  - 깨어난 인스턴스는 해당 Job의 `category`에 속하는 product만 대상으로 `runSession` 반복, 매 회 `UPDATE jobs SET completed_count = completed_count + 1`(원자적 증가)
-  - `completed_count >= target_count` 도달 시 `status='done'` 처리 후 다시 idle `LISTEN` 상태로 복귀
-- **동시 Job 거부**: `POST /jobs` 시 API 서버가 `status='running'`인 Job 존재 여부 확인 → 있으면 INSERT 없이 즉시 에러(409) 반환
-- **예상 종료시간 응답**: Job 등록 성공 시 `estimatedFinishAt = now + (target_count / 활성 인스턴스 수) × 평균 세션 소요시간`(최근 `session_log` 기준)을 응답에 포함
+### ③ 실행 흐름 — Job 기반 + LISTEN/NOTIFY (완료, 2026-06-14)
+- `index.ts`의 `main()`을 `SESSION_COUNT` 고정 반복 → `while(true)` + `getRunningJob()` 기반 idle 대기 구조로 전환. `SESSION_COUNT` 환경변수 제거
+- `infra/db.ts`에 `getRunningJob`/`incrementJobProgress`(`UPDATE ... RETURNING`으로 원자적 증가)/`completeJob`/`listenForJobCreated`(전용 `pg.Client`로 `LISTEN job_created` 유지, `pool`은 LISTEN에 부적합) 추가
+- idle 대기는 `NOTIFY` 즉시 + `IDLE_POLL_MS`(30초) 폴링 안전망을 병행. 루프 첫 바퀴에서 `getRunningJob()`을 먼저 호출하므로, 프로세스가 막 시작돼 NOTIFY를 못 받았어도 기존 `running` Job을 즉시 발견
+- `runSession(proxyManager, target, jobId)`: `DEFAULT_TARGET` 하드코딩 제거, `category`로 필터링한 `ProductTarget`(`buildTargetForCategory`)과 `jobId`를 인자로 받고 성공 여부(`boolean`)를 반환
+- `completed_count`는 **성공한 세션만** 증가, `target_count` 도달 시 `status='done'`
+- `session_log.job_id`에 실제 Job ID 기록 (`coupang/flow.ts`/`gateway/index.ts`에 `jobId` 파라미터 전달)
+- **검증 (단일 인스턴스)**: pgAdmin에서 `INSERT INTO jobs (...) VALUES (...); NOTIFY job_created;` → idle 중이던 인스턴스가 즉시 깨어나 세션 실행 → `completed_count`/`status` 정상 갱신 확인
+- **알려진 트레이드오프**: 여러 인스턴스가 동시에 마지막 세션을 처리하면 `completed_count`가 `target_count`를 소폭 초과할 수 있음 — 정밀한 동시 정지보다 단순성 우선
 
 ### ④ API 서버
 - API 서버와 매크로 인스턴스는 **직접 통신하지 않고 PostgreSQL을 매개로만 연결** — API 서버는 인스턴스 수/위치를 몰라도 됨, 인스턴스 증감 시 API 서버 코드 변경 불필요
 - 엔드포인트(안): `POST /jobs {category, count}`, `GET /jobs`, `GET /stats`(전체/항목별 성공·실패), `GET /logs`(`session_log`/`block_log` 기반)
+- `POST /jobs`: `idx_jobs_one_running` 유니크 인덱스로 동시 실행 Job 1개 제한 — 이미 `running` Job이 있으면 INSERT 없이 409 반환. 등록 성공 시 `estimatedFinishAt = now + (target_count / 활성 인스턴스 수) × 평균 세션 소요시간`(최근 `session_log` 기준)을 응답에 포함
 - 프레임워크: Express/Fastify
 
 ### ⑤ 웹 대시보드
@@ -328,8 +348,8 @@ interface ProductTarget {
 - **`findTargetProduct` 매칭 전략 (2026-06-10 개편)**: `buildSearchQuery`가 결정한 단일 `ProductItem`만 탐색. `exactNames`(옵션 변형 목록)를 랜덤 셔플 후 하나씩 ① productId 후보군 → exactName 매칭 → ② exactName 단독 매칭(productId 변경 복구) 시도, 첫 매칭에서 즉시 반환 — 매 실행마다 다른 옵션으로 진입. fuzzy 폴백 없음
 - **`ProductNotFoundError`**: `usedQueries: Set<string>` + `exhausted: boolean` 필드. index.ts가 쿼리 누적 및 종료 여부 판단. 차단 오류와 명확히 구분
 - **프록시 블랙리스트 조건**: 타겟 상품 미발견은 프록시 잘못 아님 → 블랙리스트 추가 안 함. 추가 조건: `AKAMAI_BLOCK` / `COUPANG_APP_BLOCK` / `AKAMAI_CHALLENGE` (markFailed). RET9999는 프록시 교체와 별개로 프로필 교체가 핵심 대응
-- **Akamai 차단 메커니즘**: ① 프록시 IP 평판, ② `_abck` 쿠키(세션 쿠키 기반) 복합 추적. 프록시 교체만으로 부족하고 프로필도 교체해야 `_abck` 오염 상태 리셋. (2026-06-11 추가 검증) `USER_DATA_ROOT`를 `./user-data-test` / `./user` 두 값으로 각 6세션씩(총 12세션) 실행해도 둘 다 AKAMAI_BLOCK 0건 — `profileDir`은 항상 `{root}/{Date.now()}`(매번 새 빈 폴더)이라 루트 경로 자체는 구조적으로 무관함을 재확인. 과거의 연속 AKAMAI_BLOCK은 그 시점에 뽑힌 프록시 IP 풀의 평판 문제일 가능성이 높음
-- **프로필 로테이션 전략 (3단계, 구현 완료)**: `user-data/{timestamp}` 방식. `createPersistentContext(proxy, profileDir)`로 매 시도마다 프로필 경로를 받아 사용. `AKAMAI_*` 차단 시 `fs.rmSync`로 즉시 삭제 후 새 타임스탬프 폴더 생성, 성공 시 그대로 보존
+- **Akamai 차단 메커니즘**: ① 프록시 IP 평판, ② `_abck` 쿠키(세션 쿠키 기반) 복합 추적. 프록시 교체만으로 부족하고 프로필도 교체해야 `_abck` 오염 상태 리셋. (2026-06-11 검증) `USER_DATA_ROOT` 루트 경로 자체는 차단과 무관 — 과거의 연속 AKAMAI_BLOCK은 그 시점에 뽑힌 프록시 IP 풀의 평판 문제일 가능성이 높음
+- **프로필 로테이션 전략**: 3단계에서는 `user-data/{timestamp}` 1회용 폴더 방식으로 도입했으나, 디스크 누적 문제로 5단계에서 고정 슬롯(`profile-0~5`) 재사용 방식("프로필 풀")으로 전환. `createPersistentContext(proxy, profileDir)`는 동일하게 사용하고, `AKAMAI_*` 차단 시 슬롯 번호는 유지한 채 폴더 내용만 `fs.rmSync` 후 재생성, 성공 시 그대로 보존
 - **`context.close()` vs 프로필 교체**: `context.close()`는 브라우저 프로세스 자원 정리일 뿐 `userDataDir`에 남은 `_abck` 등 디스크 데이터는 그대로 유지됨. Akamai 세션 신뢰도 리셋은 프로필 폴더 자체를 삭제·재생성해야만 가능 — 그래서 `AKAMAI_*` 계열 차단에서만 프로필을 교체
 - **이중 블랙리스트 구조 (3단계, 구현 완료)**: 인메모리 블랙리스트(이번 실행 한정, 1회 실패 시 즉시 제외)와 DB 블랙리스트(`proxy_stats.fail_count >= PROXY_FAIL_THRESHOLD`, 실행 간 누적)를 병행. `ProxyManager` 생성 시 `loadBlacklistFromDb()`로 DB 블랙리스트를 인메모리에 병합해 시작
 - **차단 복구 정책 테이블 (`core/recovery.ts`, 3단계 보완 완료)**: `BlockType → RecoveryPolicy(rotateProxy, rotateProfile, extraDelayMs?, terminal?)` 형태의 데이터 테이블로 복구 전략을 분리. `index.ts`는 정책을 조회해 실행만 담당 — 새 BlockType 추가 시 `index.ts` 수정 없이 테이블에 항목만 추가하면 됨. `HTTP_ERROR`는 연속 횟수(`httpErrorStreak`) 상태에 의존해 정책 테이블로 표현 불가 → `index.ts`에서 테이블 조회 전에 별도 처리, 테이블엔 타입 완전성용 더미 항목만 존재
@@ -373,8 +393,8 @@ if (OrigRTC) {
 ```dotenv
 # 기본 설정
 MAX_RETRY=5
-SESSION_COUNT=10                  # main()이 반복할 세션 수
-USER_DATA_ROOT=./user-data-test   # 프로필 로테이션 루트 — 실행마다 {timestamp} 하위 폴더 생성
+USER_DATA_ROOT=./user-data-test   # 프로필 풀 루트 — {root}/profile-0 ~ profile-5 고정 슬롯
+PROFILE_LOCK_STALE_MS=600000      # 비정상 종료로 in_use=true가 남은 슬롯을 재사용 허용하는 기준 시간(ms)
 PROXY_FILE_PATH=./proxies.txt
 HEADLESS=false
 
@@ -429,11 +449,16 @@ npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
 
 ## 다음 작업
 
-> 5단계 ①②(PostgreSQL 전환 — 옵션 B `macro_app`/`macro_kit`, KST 타임존, `category`/`session_log`/`jobs` 스키마 확장, `block_log` 데이터 이관) 구현 완료 (2026-06-14).
+> 5단계 ①②③(PostgreSQL 전환, `category`/`session_log`/`jobs` 스키마, Job 기반 LISTEN/NOTIFY 실행 흐름) + 프로필 풀 적용 완료 (2026-06-14). 3.2/3.3단계(디버그 캡처·네트워크 에러 처리, 프로필 캐시 정리, 광고 미노출 분리, Job 종료시각) 완료 (2026-06-15). 멀티 인스턴스(3개) 동시성 검증 완료 — 슬롯 충돌 없음, 지연 증가는 멀티 인스턴스 리소스 경쟁이 원인(코드 회귀 아님).
 
-- **5단계 ③**: Job 기반 실행 흐름 — `index.ts`를 `LISTEN/NOTIFY` 기반 idle 대기 구조로 리팩토링, `jobs.completed_count` 원자적 증가, `idx_jobs_one_running`을 이용한 동시 Job 거부, `estimatedFinishAt` 계산 (아래 "5단계" 섹션 참고)
+- **멀티 인스턴스 지연/병목 완화 — 진행 중 조사**
+  - [x] **헤드리스 모드(`HEADLESS=true`) CreepJS 검증 (완료, 2026-06-15) — 부적합 확인**: `userAgent`에 `HeadlessChrome/149.0.0.0` 문자열이 그대로 노출되고, `headless` 점수가 기존 baseline `0%`에서 `67%`로 급증(`like headless`도 `25%`→`31%`). UA 패치 없이는 멀티 인스턴스 지연 완화 목적으로 사용 불가 — 헤드리스 경로는 보류, 다른 병목 완화 수단(VPN 대역폭, 인스턴스 수 곡선, 멀티 VM)에 집중
+  - HaiIP VPN/프록시 터널 자체의 대역폭 병목 여부 확인 (단일 vs 멀티 인스턴스 네트워크 사용량 비교)
+  - 인스턴스 수를 단계적으로(3→5→8→10) 늘려가며 처리량/지연 곡선 측정
+  - 멀티 VM 분산 배치 필요성 판단
+- **멀티 인스턴스에서 `ERR_TIMED_OUT`(naver.com/google.com) 다발 + 구글 `PORTAL_CAPTCHA`(비정상 트래픽) 빈도 증가 원인 조사** — 단일 인스턴스 대비 빈도 비교 후 인스턴스별 시작 지연(jitter) 등 대응 검토 (4단계 "인스턴스 간 행동 패턴 다양화"와 연결)
+- **`Execution context was destroyed` 재발 모니터링** — 3.2단계에서 `assertNotBlocked` 재시도 로직 적용. 레이스 컨디션 성격이라 재발 시 `AKAMAI_CHALLENGE`/`AKAMAI_BLOCK`으로 정상 분류되는지 확인 필요
+- `runDiagnostics.ts` 컴파일 에러 수정 — `new ProxyManager()` → `await ProxyManager.create()` (5단계 ① 당시 누락된 잔여분)
 - **5단계 ④⑤**: API 서버(Express/Fastify) + React+Vite 대시보드 (옵션 C, 분리형 SPA)
 - `AKAMAI_CHALLENGE` / `PORTAL_CAPTCHA` 셀렉터 보정 — `debug-html/`에 캡처된 실제 차단/캡차 화면으로 `core/blockDetection.ts`의 추정 셀렉터 검증 (운영 데이터 누적 필요)
-- (보류) `query_stats` 키를 `(query, productId)` 복합키로 분리 검토 — 운영 데이터 누적 후 재검토
-- **프로필 풀 구조 적용 (설계 완료, 미적용)** — "프로필 풀 설계" 섹션 참고. 디스크 누적 문제와 멀티 인스턴스 프로필 동시성을 함께 해결
-- **4단계**: VM 반복 실행 안정성 검증
+- **4단계**: VM 반복 실행 안정성 검증, 좀비 프로세스 정리, 처리량 측정/스케줄러, 모니터링 대시보드
