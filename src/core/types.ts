@@ -9,3 +9,11 @@ export interface ProductTarget {
   brand: string;
   products: ProductItem[];
 }
+
+export interface Job {
+  id: number;
+  category: string;
+  targetCount: number;
+  completedCount: number;
+  status: "running" | "done";
+}

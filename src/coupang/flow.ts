@@ -16,7 +16,8 @@ export async function runCoupangSearchFlow(
   target: ProductTarget,
   excludeQueries: Set<string> = new Set(),
   proxy: ProxyEntry | null,
-  profileDir: string
+  profileDir: string,
+  jobId: number
 ) {
   const triedQueries = new Set<string>(excludeQueries);
   let currentQuery: string | null = null;
@@ -52,14 +53,15 @@ export async function runCoupangSearchFlow(
     await randomScrollDwell(page);
 
     console.log(`[Behavior] 타겟 상품 탐색 중: ${product.productId}`);
-    const productLink = await findTargetProduct(page, product);
+    const found = await findTargetProduct(page, product);
 
-    if (productLink) {
+    if (found) {
       await recordQueryResult(query, true);
       await logSession({
-        jobId: null,
+        jobId,
         productId: product.productId,
         category: product.category,
+        exactName: found.matchedName,
         success: true,
         blockType: null,
         proxy,
@@ -67,7 +69,7 @@ export async function runCoupangSearchFlow(
       });
       const [productPage] = await Promise.all([
         page.context().waitForEvent("page"),
-        moveMouseAlongCurveAndClick(page, productLink),
+        moveMouseAlongCurveAndClick(page, found.locator),
       ]);
       await productPage.waitForLoadState("domcontentloaded");
       await assertNotBlocked(productPage);
@@ -78,14 +80,16 @@ export async function runCoupangSearchFlow(
 
     await recordQueryResult(query, false);
     await logSession({
-      jobId: null,
+      jobId,
       productId: product.productId,
       category: product.category,
+      exactName: null,
       success: false,
       blockType: null,
       proxy,
       profileDir,
     });
     console.warn(`[Behavior] "${query}" 결과에서 타겟 상품 없음.`);
+
   }
 }

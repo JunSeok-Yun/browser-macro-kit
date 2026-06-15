@@ -4,7 +4,6 @@ import * as path from "path";
 export const ENV = {
   MAX_RETRY:    parseInt(process.env.MAX_RETRY ?? "5", 10),
   USER_DATA_ROOT: path.resolve(process.cwd(), process.env.USER_DATA_ROOT ?? "./user-data-test"),
-  SESSION_COUNT: parseInt(process.env.SESSION_COUNT ?? "10", 10),
   PROXY_FILE_PATH: path.resolve(process.cwd(), process.env.PROXY_FILE_PATH ?? "proxies.txt"),
   DEBUG_HTML_DIR: path.resolve(process.cwd(), process.env.DEBUG_HTML_DIR ?? "./debug-html"),
   HEADLESS:     process.env.HEADLESS === "true",
@@ -22,5 +21,6 @@ export const ENV = {
   NAV_TIMEOUT:              parseInt(process.env.NAV_TIMEOUT ?? "30000", 10),
   HTTP_ERROR_THRESHOLD:     parseInt(process.env.HTTP_ERROR_THRESHOLD ?? "3", 10),
   PROXY_FAIL_THRESHOLD:     parseInt(process.env.PROXY_FAIL_THRESHOLD ?? "2", 10),
-  CHALLENGE_RETRY_DELAY:    parseInt(process.env.CHALLENGE_RETRY_DELAY ?? "10000", 10)
+  CHALLENGE_RETRY_DELAY:    parseInt(process.env.CHALLENGE_RETRY_DELAY ?? "10000", 10),
+  PROFILE_LOCK_STALE_MS:    parseInt(process.env.PROFILE_LOCK_STALE_MS ?? "600000", 10)
 };

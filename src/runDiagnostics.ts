@@ -12,7 +12,7 @@ async function main() {
   console.log(`[진단] ${TARGET} 검증 시작...`);
   console.log(`[진단] 영구 프로필 경로: ${ENV.USER_DATA_ROOT}`);
 
-  const proxyManager = new ProxyManager();
+  const proxyManager = await ProxyManager.create();
   const proxy = proxyManager.getRandom();
 
   if (!proxy) {

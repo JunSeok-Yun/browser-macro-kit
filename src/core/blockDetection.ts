@@ -9,6 +9,7 @@ const PROXY_ERROR_PATTERNS = [
     "ERR_CONNECTION_RESET",
     "ERR_CONNECTION_CLOSED",
     "ERR_CONNECTION_TIMED_OUT",
+    "ERR_TIMED_OUT",
     "ERR_SOCKS_CONNECTION_FAILED",
     "ERR_EMPTY_RESPONSE",
     "ERR_NAME_NOT_RESOLVED",
@@ -19,6 +20,7 @@ const PROXY_ERROR_PATTERNS = [
     "ERR_HTTP2_PROTOCOL_ERROR",
     "Timeout",
 ];
+
 
 
 export function classifyNavigationError(error: unknown): BlockType | null {
@@ -101,6 +103,21 @@ export async function assertPortalNotBlocked(page: Page, portal: PortalType): Pr
 }
 
 export async function assertNotBlocked(page: Page): Promise<void> {
+    try {
+        await assertNotBlockedOnce(page);
+    } catch (error) {
+        // 검사 도중 페이지가 추가 navigation으로 전환되며 컨텍스트가 파괴된 경우
+        // → 새 페이지가 안정화될 때까지 기다린 뒤 한 번 더 검사
+        if (error instanceof Error && error.message.includes("Execution context was destroyed")) {
+            await page.waitForLoadState("domcontentloaded").catch(() => {});
+            await assertNotBlockedOnce(page);
+            return;
+        }
+        throw error;
+    }
+}
+
+async function assertNotBlockedOnce(page: Page): Promise<void> {
     const url = page.url();
 
     // AKAMAI_CHALLENGE: 챌린지 iframe 존재 여부 (...)

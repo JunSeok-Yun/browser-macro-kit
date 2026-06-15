@@ -4,13 +4,15 @@ import { Page } from "patchright";
 import { ENV } from "../config/env";
 import { typeLikeHuman } from "../automation/keyboard";
 import { sleep } from "../utils";
+import { saveDebugHtml } from "../infra/debugCapture";
+import { NoLinkFoundError } from "../core/errors";
 
 /**
  * 네이버를 경유하여 쿠팡으로 진입하는 로직
  */
 export async function runNaverGateway(page: Page) {
   console.log("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
-  await safeGoto(page, "https://www.naver.com"); 
+  await safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
   await sleep(ENV.NAVER_ENTRY_DELAY);
 
   // 1. 네이버 메인 검색창 입력 및 엔터
@@ -41,7 +43,9 @@ export async function runNaverGateway(page: Page) {
   console.log(`[Gateway] 매칭된 링크 요소 개수: ${elementCount}개`);
 
   if (elementCount === 0) {
-    throw new Error("네이버 검색 결과에서 쿠팡으로 이동할 수 있는 링크를 찾지 못했습니다. 셀렉터 확인 필요.");
+    const html = await page.content();
+    const htmlPath = saveDebugHtml(html, "NAVER_NO_LINK");
+    throw new NoLinkFoundError(`네이버 검색 결과에서 쿠팡 브랜드검색 링크를 찾지 못했습니다 (광고 미노출 추정). (HTML: ${htmlPath})`, htmlPath);
   }
 
   const href = await coupangLink.getAttribute("href");

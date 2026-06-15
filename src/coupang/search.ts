@@ -44,7 +44,12 @@ export function normalizeProductText(raw: string): string {
   return raw.replace(/\s+/g, " ").trim();
 }
 
-export async function findTargetProduct(page: Page, product: ProductItem): Promise<Locator | null> {
+export interface FoundProduct {
+  locator: Locator;
+  matchedName: string;
+}
+
+export async function findTargetProduct(page: Page, product: ProductItem): Promise<FoundProduct | null> {
   const productLinks = page.locator('a[href*="/vp/products/"]').filter({ hasNotText: "광고" });
   const hrefs = await productLinks.evaluateAll((els) =>
     els.map((el) => (el as HTMLAnchorElement).getAttribute("href") ?? "")
@@ -63,12 +68,12 @@ export async function findTargetProduct(page: Page, product: ProductItem): Promi
 
     if (candidateIndexes.length > 0) {
       const matched = candidateIndexes.find(i => normalizedTexts[i].includes(name));
-      if (matched !== undefined) return productLinks.nth(matched);
+      if (matched !== undefined) return { locator: productLinks.nth(matched), matchedName: name };
     }
 
     // 2순위: productId 변경됐을 때 복구 — exactName 단독 매칭
     const exactIndex = normalizedTexts.findIndex(text => text.includes(name));
-    if (exactIndex !== -1) return productLinks.nth(exactIndex);
+    if (exactIndex !== -1) return { locator: productLinks.nth(exactIndex), matchedName: name };
   }
 
   return null;

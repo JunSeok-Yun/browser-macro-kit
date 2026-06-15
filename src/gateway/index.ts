@@ -14,7 +14,8 @@ export async function runPortalGateway(
   target: ProductTarget,
   excludeQueries: Set<string> = new Set(),
   proxy: ProxyEntry | null,
-  profileDir: string
+  profileDir: string,
+  jobId : number
 ): Promise<boolean> {
   const isNaver = Math.random() < ENV.NAVER_RATIO;
 
@@ -29,7 +30,7 @@ export async function runPortalGateway(
     const currentUrl = targetPage.url();
     if (currentUrl.includes("coupang.com")) {
       console.log(`[Success] 쿠팡 진입 성공! 현재 URL: ${currentUrl}`);
-      await runCoupangSearchFlow(targetPage, target, excludeQueries, proxy, profileDir);
+      await runCoupangSearchFlow(targetPage, target, excludeQueries, proxy, profileDir, jobId);
       return true;
     } else {
       console.log(`[Fail] 다른 페이지로 이탈됨: ${currentUrl}`);
