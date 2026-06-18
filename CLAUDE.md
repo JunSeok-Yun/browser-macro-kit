@@ -24,7 +24,7 @@ Patchright 기반 브라우저 자동화 프로젝트. 포털 사이트(네이�
 ```
 src/
   index.ts              - 메인 진입점. Job 기반 idle 루프(LISTEN/NOTIFY), 세션 재시도, 프로필 슬롯 관리
-  runDiagnostics.ts     - 진단 전용 진입점 (creepjs | pixelscan)
+  runDiagnostics.ts     - 진단 전용 진입점 (creepjs | pixelscan | canvas [slot])
   utils.ts              - 공통 유틸리티 (sleep)
 
   config/
@@ -61,10 +61,12 @@ src/
     pixelscan.ts        - pixelscan 봇 탐지 검증 게이트웨이
     checker.ts          - pixelscan 스캔 버튼 클릭 모듈
     creepjs.ts          - CreepJS 지문 분석 결과 텍스트 캡처/저장
+    canvas.ts           - Canvas 지문 측정 진단 (browserleaks.com 기반, selfTest + BL Signature)
 
 .env              - 환경변수 (하단 참조)
 proxies.txt       - HaiIP "IP 저장" 버튼으로 생성되는 프록시 목록 (IP:PORT, 약 2000개)
 creepjs-result.txt - runDiagnostics 실행 시 생성 (gitignore 처리)
+canvas-fingerprint.txt - runDiagnostics canvas 실행 시 생성 (gitignore 처리)
 ```
 
 ## 단계별 진행 현황
@@ -191,7 +193,18 @@ interface ProductTarget {
 - [x] **멀티 인스턴스(3개) 재검증** — 프로필 슬롯 충돌 없음, `completed_count`가 `target_count`를 소폭 초과(10/8, 14/12)하는 기존 문서화 트레이드오프 재확인
 - [x] **단일 vs 멀티 인스턴스 지연 비교** — 단일 인스턴스 세션당 ~45~52초(기존 56~57초 기준과 동등 이상, 이번 세션의 신규 코드로 인한 지연 없음 확인) vs 3개 동시 실행 시 ~69~74초. **지연 증가 원인은 멀티 인스턴스 리소스 경쟁**(기존부터 존재하던 현상)으로 확인 — 코드 회귀 아님
 
-### 4단계 - 운영 환경 검증 (예정)
+### 4단계 - 운영 환경 검증 (진행 중)
+
+#### Canvas 지문 다양화 (완료, 2026-06-18)
+
+- [x] **`SLOT_RESOLUTIONS`** — 20종 해상도(1920×1080 ~ 3840×2160)를 슬롯 인덱스로 순환 할당. `infra/browser.ts`에서 슬롯별 `--window-size` 및 `screen.*` 패치에 사용
+- [x] **슬롯별 결정적 해시** — `(slot+1) * 0x9E3779B9 >>> 0`로 `noiseDelta`(±1) / `noiseChannel`(R/G/B) / `noisePixelFrac`(0.00~0.99) / `audioNoise`(±1e-7) 결정 — 같은 슬롯은 재실행해도 동일 지문, 슬롯 간에는 서로 다른 지문
+- [x] **Canvas 노이즈** — `noisedToDataURL`(height/2 픽셀 수정) + `noisedGetImageData`를 `addInitScript`로 main world에 주입. **premultiplied alpha 문제 해결**: y=0(투명 픽셀) 수정 시 alpha=0 → RGB 소실 → alpha=0이면 alpha=1 fallback으로 처리
+- [x] **WebGL readPixels 노이즈** / **AudioBuffer getChannelData 노이즈** 추가
+- [x] **`src/test/canvas.ts` 진단 도구 신규** — `npx ts-node src/runDiagnostics.ts canvas [slot]`으로 selfTest sig + BL Signature 측정. `(page as any).evaluate(fn, undefined, false)` = main world 실행
+- [x] **검증**: slot-0/1/2 selfTest sig 모두 상이 ✓, 같은 슬롯 재실행 시 동일(결정적) ✓
+- [x] **WebGL `getParameter` 스푸핑 기각** — JS prototype 패치 시 `gl.getParameter.toString()`이 `[native code]`가 아닌 커스텀 함수 코드를 반환 → Akamai가 즉시 감지. engine-level 패치(C++)가 아닌 이상 안전하지 않음 → vendor/renderer는 실제 GPU 값 그대로 유지
+- [ ] **미검증**: 실제 쿠팡 세션에서 방문자수 개선 여부 — canvas 노이즈 패치 적용 후 세션 실행 및 쿠팡 판매자 대시보드 확인 필요
 
 #### 안정성 / 인프라
 
@@ -200,6 +213,7 @@ interface ProductTarget {
 - [x] **`user-data-test/` 디스크 누적 (완료, 2026-06-14)** — 52개 폴더 × 평균 ~70MB ≈ 3.6GB까지 쌓였던 문제. `newProfileDir()`(세션마다 새 `{timestamp}` 폴더) 방식을 폐기하고 "프로필 풀"(고정 슬롯 6개 재사용)로 전환해 디스크 사용량을 `6 × ~70MB`로 고정. 기존 leftover 폴더는 수동 정리 필요
 - [ ] **좀비 프로세스 정리** — headed 모드로 장시간 반복 실행 시 Chrome 프로세스가 메모리에 잔류하는지 우선 확인. 잔류가 확인되면 `taskkill /f /im chrome.exe` 주기 실행은 멀티 인스턴스 환경에서 다른 인스턴스의 브라우저까지 종료시키므로, `launchPersistentContext`가 반환하는 프로세스 PID 기반 종료로 대체 검토
 - [x] **타임스탬프 KST 통일 (완료, 2026-06-14)** — PostgreSQL 전환과 함께 `ALTER DATABASE macro_kit SET timezone TO 'Asia/Seoul';`로 해결. `TIMESTAMPTZ` + `now()`는 절대 시각을 저장하고, DB 세션 타임존 설정에 따라 pgAdmin/psql에서 KST로 표시됨
+- [x] **`TEST_PROFILE_DIR` 버그 수정 (2026-06-18)** — `.env`에 canvas 진단용 `TEST_PROFILE_DIR=./user-data-test/tset-canvas`가 잔존 → `isTestMode=true` → `slot=null` + Chrome이 이미 점유 중인 폴더를 열려고 시도 → EPERM + 실행 실패. `TEST_PROFILE_DIR`을 `.env`/`config/env.ts`에서 완전 제거하고 `index.ts`의 `isTestMode` 분기도 제거 — 항상 프로필 풀만 사용
 
 #### 처리량 / 스케줄링
 
@@ -222,7 +236,7 @@ interface ProductTarget {
 
 `user-data-test/` 디스크 누적과 멀티 인스턴스 프로필 동시성 문제를 해결하기 위해 `newProfileDir()`(`{timestamp}` 1회용 폴더) 방식을 폐기하고 고정 슬롯 재사용 방식으로 전환.
 
-- **고정 슬롯**: `{USER_DATA_ROOT}/profile-0` ~ `profile-5` (6개) — 폴더 개수가 6개로 고정되어 디스크 사용량이 `6 × ~70MB`(관찰된 평균치) 수준으로 수렴. 70MB는 강제 상한이 아닌 추정치이며, 용량 기준 자동 정리 로직은 없음(아래 보류 이슈 참고)
+- **고정 슬롯**: `{USER_DATA_ROOT}/profile-0` ~ `profile-19` (20개, 2026-06-15 6개→20개 확장 — 8~12 인스턴스 동시 실행 대비) — 폴더 개수가 고정되어 디스크 사용량이 `슬롯 수 × ~70MB`(관찰된 평균치) 수준으로 수렴. 70MB는 강제 상한이 아닌 추정치이며, 용량 기준 자동 정리 로직은 없음(아래 보류 이슈 참고). 확장 시 `INSERT INTO profile_pool (slot, in_use, locked_at, last_used) SELECT s, false, NULL, NULL FROM generate_series(6, 19) AS s;`로 pgAdmin에서 수동 추가
 - **`profile_pool` 테이블** (`slot, in_use, locked_at, last_used`, pgAdmin에서 수동 생성+시드): `acquireProfileSlot(staleMs)`이 `in_use=false` 또는 `locked_at`이 `PROFILE_LOCK_STALE_MS`(기본 10분)보다 오래된 슬롯 중 `last_used`가 가장 오래된(NULL 우선) 슬롯을 `FOR UPDATE SKIP LOCKED`로 원자적 점유, `releaseProfileSlot(slot)`이 반납 + `last_used` 갱신 — 라운드로빈으로 슬롯이 균등 재사용되어 "세션 간 `_abck` 누적" 설계 의도가 실제로 작동
 - **차단 시 로테이션**: `rotateProfile: true`여도 슬롯 번호는 유지, 폴더 내용만 `fs.rmSync` 후 재생성
 - **모든 슬롯 사용 중**: `acquireProfileSlotWithRetry`가 5초 대기 후 재시도
@@ -250,9 +264,11 @@ interface ProductTarget {
 
 ### ② 스키마 확장 (완료, 2026-06-14)
 - **`category` 필드**: `core/types.ts`의 `ProductItem`에 `category: string` 추가 — `productId: "9288498572"`(보쌈)에 `category: "보쌈"` 적용, `config/target.ts`의 `DEFAULT_TARGET`에도 반영 (등갈비 상품은 주석 처리된 상태로 `category: "등갈비"` 추가)
+- **`반반팩` 상품 추가 (2026-06-15)** — `config/target.ts`의 `DEFAULT_TARGET.products`에 `productId: "9483036408"`, `category: "반반팩"` 등록 (exactNames 1종 + keywords 12종)
 - **`session_log` 테이블**: `block_log`는 실패만 기록하므로, 성공도 포함한 "상품별 성공/실패 횟수" 조회를 위해 신설. 컬럼: `id, job_id, product_id, category, exact_name(nullable), success, block_type(nullable), proxy_host, proxy_port, profile_dir, occurred_at`. `coupang/flow.ts`의 `runCoupangSearchFlow`에서 상품 발견/미발견 시점마다 `infra/db.ts`의 `logSession()` 호출 — `GROUP BY product_id, category` + `COUNT(*) FILTER (WHERE success)`로 항목별 성공/실패 집계 가능
 - **`exact_name` 컬럼 추가 (완료, 2026-06-14)** — `findTargetProduct`가 매칭에 성공한 `exactNames` 옵션 문자열(예: "국내산 한돈 통 오겹살 저당 저칼로리 한방 보쌈 수육, 1개, 300g")을 `{ locator, matchedName }` 형태로 반환하고, `runCoupangSearchFlow`가 이를 `logSession`에 전달. 실패 시(`exactIndex` 미발견)는 `null`. `GROUP BY product_id, exact_name` + `COUNT(*) FILTER (WHERE success)`로 옵션별 성공 횟수 집계 가능
 - **`jobs` 테이블**: 웹에서 "카테고리 + 횟수"(예: 보쌈, 3000) 요청 시 생성될 예정. 컬럼: `id, category, target_count, completed_count, status(running/done), created_at`. `idx_jobs_one_running` 유니크 인덱스(`CREATE UNIQUE INDEX ... ON jobs (status) WHERE status = 'running'`)로 동시 실행 Job을 DB 레벨에서 1개로 제한 (③ 구현 시 활용)
+- **`jobs.failed_session_count` 컬럼 추가 (완료, 2026-06-16)** — `runSession()`이 `false`(5회 재시도 모두 실패/exhausted/프록시 없음 등 `!success`)를 반환한 횟수를 누적. `infra/db.ts`에 `incrementJobFailedCount(jobId)` 추가, `index.ts` 메인 루프의 `if (success) {...} else { await incrementJobFailedCount(job.id); }`에서 호출. **주의**: 최초 적용 시 `else`가 `if (success)`가 아닌 내부 `if (completedCount >= targetCount)`에 잘못 붙어 "목표 도달 전 성공 횟수"를 카운트하는 버그가 있었음(2026-06-16 발견 즉시 수정) — 수정 이전(Job 24 등)에 쌓인 `failed_session_count` 값은 실패율 지표로 사용 불가
 
 ### ③ 실행 흐름 — Job 기반 + LISTEN/NOTIFY (완료, 2026-06-14)
 - `index.ts`의 `main()`을 `SESSION_COUNT` 고정 반복 → `while(true)` + `getRunningJob()` 기반 idle 대기 구조로 전환. `SESSION_COUNT` 환경변수 제거
@@ -355,6 +371,8 @@ interface ProductTarget {
 - **차단 복구 정책 테이블 (`core/recovery.ts`, 3단계 보완 완료)**: `BlockType → RecoveryPolicy(rotateProxy, rotateProfile, extraDelayMs?, terminal?)` 형태의 데이터 테이블로 복구 전략을 분리. `index.ts`는 정책을 조회해 실행만 담당 — 새 BlockType 추가 시 `index.ts` 수정 없이 테이블에 항목만 추가하면 됨. `HTTP_ERROR`는 연속 횟수(`httpErrorStreak`) 상태에 의존해 정책 테이블로 표현 불가 → `index.ts`에서 테이블 조회 전에 별도 처리, 테이블엔 타입 완전성용 더미 항목만 존재
 - **`PROXY_ERROR`/`HTTP_ERROR` 분류 (`core/blockDetection.ts`)**: `classifyNavigationError`가 `page.goto()` 등에서 던져진 에러의 `.message`를 `ERR_TUNNEL_CONNECTION_FAILED`/`Timeout` 등 패턴과 매칭해 `PROXY_ERROR`로 분류. `safeGoto`는 `page.goto()`를 감싸 예외는 `classifyNavigationError`로, 정상 응답은 `assertResponseOk`로 5xx 여부를 검사해 `HTTP_ERROR`로 변환. `withNavigationErrorHandling`은 `page.goto()`가 아닌 탐색 동작(클릭 후 `waitForLoadState` 등)에 동일 분류 로직을 재사용하기 위한 범용 래퍼. 모두 Node 쪽 에러 메시지/응답 메타데이터만 다루므로 Akamai 등 차단 시스템에 노출되는 브라우저 동작에는 영향 없음
 - **`PORTAL_CAPTCHA` (`assertPortalNotBlocked`)**: 네이버/구글 자체의 봇 차단(캡차, 비정상 트래픽 경고)을 쿠팡(Akamai) 차단과 별도로 감지. 네이버는 `#captcha_img` 등 캡차 셀렉터 + "비정상적인 접근" 본문 텍스트, 구글은 URL의 `/sorry/` 리다이렉트 + reCAPTCHA iframe으로 판별. 검색 결과 로드 직후(`gateway/naver.ts`/`google.ts`)에 호출. 복구 정책은 `AKAMAI_BLOCK`과 동일(프록시+프로필 교체) — 포털의 IP 평판/쿠키 추적 메커니즘이 Akamai와 유사하다고 판단
+- **Canvas 노이즈 방식 (2026-06-18)**: `toDataURL`/`getImageData`를 `addInitScript`로 main world에 패치 — JS prototype 패치이므로 `HTMLCanvasElement.prototype.toDataURL.toString()`이 `[native code]`를 반환하지 않음. Akamai가 이를 검사하면 탐지 가능하나, `getParameter.toString()`(WebGL)만큼 명시적으로 타깃팅한다는 증거는 없음 — 실 세션 검증으로 확인 필요. WebGL `getParameter` 스푸핑은 `toString()` 탐지 위험이 문서화되어 있어 기각
+- **`addInitScript` main world 주입 확인법**: `(page as any).evaluate(fn, undefined, false)` — 세 번째 인자 `false` + 두 번째 인자 `undefined` 조합이 main world 실행을 보장. `undefined` 외 인자를 전달하면 Patchright API 동작이 달라져 main world 보장 안 됨(quirk)
 
 ## 현재 브라우저 실행 옵션
 
@@ -369,31 +387,24 @@ args: [
   "--remote-debugging-port=0",
   "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
   "--disable-popup-blocking",
+  "--disable-dev-shm-usage",  // 리눅스 VM/컨테이너 공유메모리 고갈 방지. fingerprint에 영향 없음
 ]
 ```
 
-addInitScript (context 레벨):
+addInitScript (context 레벨, 슬롯별 파라미터 주입):
 
-```typescript
-Object.defineProperty(window, "outerWidth", { get: () => window.innerWidth });
-Object.defineProperty(window, "outerHeight", { get: () => window.innerHeight });
-
-const OrigRTC = window.RTCPeerConnection;
-if (OrigRTC) {
-  (window as any).RTCPeerConnection = function (cfg: any) {
-    return new OrigRTC(cfg ? { ...cfg, iceServers: [] } : undefined);
-  };
-  (window as any).RTCPeerConnection.prototype = OrigRTC.prototype;
-  Object.assign((window as any).RTCPeerConnection, OrigRTC);
-}
-```
+- **창 크기 정합성**: `outerWidth`/`outerHeight` → `innerWidth`/`innerHeight` 위임. `screen.*`를 슬롯 해상도로 패치
+- **WebRTC ICE 차단**: `iceServers: []`로 STUN 서버 제거 — `RTCPeerConnection` 자체는 유지
+- **Canvas 노이즈**: `toDataURL` / `getImageData` 오버라이드 — 슬롯 해시 기반 1픽셀 미세 수정 (premultiplied alpha 대응 포함)
+- **WebGL readPixels 노이즈**: `WebGLRenderingContext` / `WebGL2RenderingContext` `readPixels` 오버라이드
+- **AudioBuffer 노이즈**: `getChannelData` 오버라이드 — 첫 샘플에 ±1e-7 가산
 
 ## 환경변수 (.env)
 
 ```dotenv
 # 기본 설정
 MAX_RETRY=5
-USER_DATA_ROOT=./user-data-test   # 프로필 풀 루트 — {root}/profile-0 ~ profile-5 고정 슬롯
+USER_DATA_ROOT=./user-data-2      # 프로필 풀 루트 — {root}/profile-0 ~ profile-19 고정 슬롯 (20개)
 PROFILE_LOCK_STALE_MS=600000      # 비정상 종료로 in_use=true가 남은 슬롯을 재사용 허용하는 기준 시간(ms)
 PROXY_FILE_PATH=./proxies.txt
 HEADLESS=false
@@ -438,9 +449,10 @@ npm install
 npx patchright install chromium
 cp .env.example .env   # 값 수정 후 사용
 # HaiIP 클라이언트 → "접속하기" → "IP 저장" → proxies.txt 갱신
-npx ts-node src/index.ts                     # 실제 자동화 루프
-npx ts-node src/runDiagnostics.ts            # CreepJS 지문 분석
-npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
+npx ts-node src/index.ts                          # 실제 자동화 루프 (pgAdmin에서 Job INSERT + NOTIFY 필요)
+npx ts-node src/runDiagnostics.ts                 # CreepJS 지문 분석
+npx ts-node src/runDiagnostics.ts pixelscan       # pixelscan 봇 탐지 테스트
+npx ts-node src/runDiagnostics.ts canvas [slot]   # Canvas 지문 슬롯별 측정
 ```
 
 ## 보류 작업
@@ -449,16 +461,18 @@ npx ts-node src/runDiagnostics.ts pixelscan  # pixelscan 봇 탐지 테스트
 
 ## 다음 작업
 
-> 5단계 ①②③(PostgreSQL 전환, `category`/`session_log`/`jobs` 스키마, Job 기반 LISTEN/NOTIFY 실행 흐름) + 프로필 풀 적용 완료 (2026-06-14). 3.2/3.3단계(디버그 캡처·네트워크 에러 처리, 프로필 캐시 정리, 광고 미노출 분리, Job 종료시각) 완료 (2026-06-15). 멀티 인스턴스(3개) 동시성 검증 완료 — 슬롯 충돌 없음, 지연 증가는 멀티 인스턴스 리소스 경쟁이 원인(코드 회귀 아님).
+> Canvas 지문 다양화 + `TEST_PROFILE_DIR` 버그 수정 완료 (2026-06-18). 이전: 5단계 ①②③(PostgreSQL, 스키마, Job LISTEN/NOTIFY) + 프로필 풀 완료 (2026-06-14), 3.2/3.3단계 완료 (2026-06-15), `failed_session_count` 완료 (2026-06-16).
 
-- **멀티 인스턴스 지연/병목 완화 — 진행 중 조사**
-  - [x] **헤드리스 모드(`HEADLESS=true`) CreepJS 검증 (완료, 2026-06-15) — 부적합 확인**: `userAgent`에 `HeadlessChrome/149.0.0.0` 문자열이 그대로 노출되고, `headless` 점수가 기존 baseline `0%`에서 `67%`로 급증(`like headless`도 `25%`→`31%`). UA 패치 없이는 멀티 인스턴스 지연 완화 목적으로 사용 불가 — 헤드리스 경로는 보류, 다른 병목 완화 수단(VPN 대역폭, 인스턴스 수 곡선, 멀티 VM)에 집중
-  - HaiIP VPN/프록시 터널 자체의 대역폭 병목 여부 확인 (단일 vs 멀티 인스턴스 네트워크 사용량 비교)
-  - 인스턴스 수를 단계적으로(3→5→8→10) 늘려가며 처리량/지연 곡선 측정
-  - 멀티 VM 분산 배치 필요성 판단
-- **멀티 인스턴스에서 `ERR_TIMED_OUT`(naver.com/google.com) 다발 + 구글 `PORTAL_CAPTCHA`(비정상 트래픽) 빈도 증가 원인 조사** — 단일 인스턴스 대비 빈도 비교 후 인스턴스별 시작 지연(jitter) 등 대응 검토 (4단계 "인스턴스 간 행동 패턴 다양화"와 연결)
-- **`Execution context was destroyed` 재발 모니터링** — 3.2단계에서 `assertNotBlocked` 재시도 로직 적용. 레이스 컨디션 성격이라 재발 시 `AKAMAI_CHALLENGE`/`AKAMAI_BLOCK`으로 정상 분류되는지 확인 필요
-- `runDiagnostics.ts` 컴파일 에러 수정 — `new ProxyManager()` → `await ProxyManager.create()` (5단계 ① 당시 누락된 잔여분)
+### 지속 모니터링
+
+- **인스턴스 수 증가 시 `NAVER_NO_LINK` 비율 급증** — N=8 시 네이버 NO_LINK ~60%, 성공률 ~3%로 붕괴. 가설: HaiIP IP 대역이 좁아 동시 다발 쿠팡 검색이 네이버 광고서버에서 비정상 트래픽으로 차단 — 미검증
+- **`NoLinkFoundError` DB 미기록** — `block_log`/`session_log` 어디에도 안 남아 SQL 집계 불가. 로깅 추가 필요 (미구현)
+- **`Execution context was destroyed` 재발** — 3.2단계에서 재시도 로직 적용. 재발 시 `AKAMAI_CHALLENGE`/`AKAMAI_BLOCK`으로 분류되는지 확인
+
+### 향후 작업
+
+- **4단계**: VM 반복 실행 안정성 검증, 좀비 프로세스 정리, 처리량 측정/스케줄러
 - **5단계 ④⑤**: API 서버(Express/Fastify) + React+Vite 대시보드 (옵션 C, 분리형 SPA)
-- `AKAMAI_CHALLENGE` / `PORTAL_CAPTCHA` 셀렉터 보정 — `debug-html/`에 캡처된 실제 차단/캡차 화면으로 `core/blockDetection.ts`의 추정 셀렉터 검증 (운영 데이터 누적 필요)
-- **4단계**: VM 반복 실행 안정성 검증, 좀비 프로세스 정리, 처리량 측정/스케줄러, 모니터링 대시보드
+- **Docker 전환 (Xvfb headed)** — `HEADLESS=false` + `channel:"chrome"` 유지하면서 Xvfb로 컨테이너 내 실행. 단, NO_LINK 원인이 네트워크/포털 트래픽 패턴이라면 Docker 전환만으로는 미해결 — 원인 조사 먼저
+- **프록시 동시 사용 조율** — `proxy_locks` 테이블(`FOR UPDATE SKIP LOCKED`) 설계됨, 구현 여부 미결정
+- `AKAMAI_CHALLENGE` / `PORTAL_CAPTCHA` 셀렉터 보정 — `debug-html/` 실제 캡처로 검증 (운영 데이터 누적 필요)
