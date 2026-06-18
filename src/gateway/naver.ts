@@ -1,56 +1,62 @@
-import { assertPortalNotBlocked } from "../core/blockDetection";
-import { safeGoto } from "../core/blockDetection";
+import { assertPortalNotBlocked, safeGoto, withNavigationErrorHandling } from "../core/blockDetection";
 import { Page } from "patchright";
 import { ENV } from "../config/env";
 import { typeLikeHuman } from "../automation/keyboard";
 import { sleep } from "../utils";
+import { saveDebugHtml } from "../infra/debugCapture";
+import { NoLinkFoundError } from "../core/errors";
 
-/**
- * 네이버를 경유하여 쿠팡으로 진입하는 로직
- */
-export async function runNaverGateway(page: Page) {
-  console.log("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
-  await safeGoto(page, "https://www.naver.com"); 
-  await sleep(ENV.NAVER_ENTRY_DELAY);
+const NAVER_COUPANG_SELECTOR = [
+  'a.direct_link:not([href*="link.coupang.com"])',
+  'a[href*="coupang.com"]:not([href*="ader.naver.com"]):not([href*="link.coupang.com"])',
+].join(", ");
 
-  // 1. 네이버 메인 검색창 입력 및 엔터
-  // 2026년 기준 네이버 메인 검색창 ID: #query
-  await typeLikeHuman(page, "#query", "쿠팡");
-  await page.keyboard.press("Enter");
+/** 네이버 검색 결과 페이지에서 쿠팡 링크를 찾아 클릭. 최초 진입·재시도 모두 공용 */
+export async function enterCoupangFromNaverResults(page: Page): Promise<void> {
+  const coupangLink = page.locator(NAVER_COUPANG_SELECTOR).first();
 
-  // DOM이 안정화될 때까지 대기
-  await page.waitForLoadState("domcontentloaded");
-  await sleep(ENV.NAVER_SEARCH_DELAY);
-  await assertPortalNotBlocked(page, "naver");
-
-  console.log("[Gateway] 네이버 검색 결과에서 실제 이동 가능한 링크 요소를 탐색합니다.");
-
-  // 2. 검색 결과 화면에서 쿠팡 공식 사이트 링크 클릭
-  // 네이버 검색 결과 내 웹사이트 링크나 브랜드검색 영역 셀렉터 타겟팅
-  // (안전하게 쿠팡 텍스트가 포함된 링크 요소를 찾아 곡선 효과 대용으로 자연스럽게 클릭)
-  const coupangLink = page
-    .locator(
-      [
-        'a.direct_link:not([href*="link.coupang.com"])',
-        'a[href*="coupang.com"]:not([href*="ader.naver.com"]):not([href*="link.coupang.com"])',
-      ].join(", "),
-    )
-    .first();
+  await coupangLink.waitFor({ state: "attached", timeout: 4000 }).catch(() => {});
 
   const elementCount = await coupangLink.count();
   console.log(`[Gateway] 매칭된 링크 요소 개수: ${elementCount}개`);
 
   if (elementCount === 0) {
-    throw new Error("네이버 검색 결과에서 쿠팡으로 이동할 수 있는 링크를 찾지 못했습니다. 셀렉터 확인 필요.");
+    const html = await page.content();
+    const htmlPath = saveDebugHtml(html, "NAVER_NO_LINK");
+    throw new NoLinkFoundError(
+      `네이버 검색 결과에서 쿠팡 브랜드검색 링크를 찾지 못했습니다 (광고 미노출 추정). (HTML: ${htmlPath})`,
+      htmlPath,
+    );
   }
 
-  const href = await coupangLink.getAttribute("href");
+console.log("[Gateway] 쿠팡으로 이동합니다...");
+// 네이버 브랜드검색 링크는 target="_blank" 가 붙어 있을 수 있음
+// → 클릭 전에 _self로 강제 변경해 새 탭 대신 현재 탭에서 이동하게 함
+await coupangLink.evaluate((el) => { (el as HTMLAnchorElement).target = "_self"; });
+await withNavigationErrorHandling(() =>
+  Promise.all([
+    page.waitForURL((url) => url.hostname.includes("coupang.com"), { timeout: ENV.NAV_TIMEOUT, waitUntil: "domcontentloaded" }),
+    coupangLink.click(),
+  ])
+);
 
-  if (!href) throw new Error("링크 href를 찾을 수 없습니다.");
+  await sleep(ENV.COUPANG_ENTRY_DELAY);
+}
 
-  console.log("[Gateway] 쿠팡으로 이동합니다...");
-  await safeGoto(page, href, { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT});
-  await sleep(ENV.COUPANG_ENTRY_DELAY); // 쿠팡 메인화면 UI가 완전히 그려질 때까지 대기
+export async function runNaverGateway(page: Page): Promise<Page> {
+  console.log("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
+  await safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
+  await sleep(ENV.NAVER_ENTRY_DELAY);
+
+  await typeLikeHuman(page, "#query", "쿠팡");
+  await page.keyboard.press("Enter");
+
+  await page.waitForLoadState("domcontentloaded");
+  await sleep(ENV.NAVER_SEARCH_DELAY);
+  await assertPortalNotBlocked(page, "naver");
+
+  console.log("[Gateway] 네이버 검색 결과에서 실제 이동 가능한 링크 요소를 탐색합니다.");
+  await enterCoupangFromNaverResults(page);
 
   return page;
 }
