@@ -2,12 +2,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { ENV } from "./config/env";
 import { DEFAULT_TARGET } from "./config/target";
-import { createPersistentContext, clearProfileCache } from "./infra/browser";
+import { createPersistentContext, clearProfileCache, clearCoupangVisitorCookies } from "./infra/browser";
 import { runPortalGateway } from "./gateway";
 import { ProductNotFoundError, BlockDetectedError, NoLinkFoundError } from "./core/errors";
 import { BLOCK_RECOVERY, RecoveryPolicy } from "./core/recovery";
 import { ProxyManager, ProxyEntry } from "./infra/proxyManager";
-import { logBlock, getRunningJob, incrementJobProgress, completeJob, listenForJobCreated, acquireProfileSlot, releaseProfileSlot } from "./infra/db";
+import { logBlock, getRunningJob, incrementJobProgress, incrementJobFailedCount, completeJob, listenForJobCreated, acquireProfileSlot, releaseProfileSlot } from "./infra/db";
 import { ProductTarget, Job } from "./core/types";
 import { sleep } from "./utils";
 
@@ -100,6 +100,8 @@ async function main() {
           await completeJob(job.id);
           console.log(`[메인] Job ${job.id} 완료.`);
         }
+      } else {
+        await incrementJobFailedCount(job.id);
       }
     }
   } finally {
@@ -131,7 +133,7 @@ async function runSession(proxyManager: ProxyManager, target: ProductTarget, job
   let proxy = proxyManager.getRandom();
   const slot = await acquireProfileSlotWithRetry();
   const profileDir = profileDirForSlot(slot);
-  let httpErrorStreak = 0; // HTTP_ERROR N회 후 프록시 교체용
+  let httpErrorStreak = 0 // HTTP_ERROR N회 후 프록시 교체용
 
   try {
     for (let i = 1; i <= ENV.MAX_RETRY; i++) {
@@ -142,7 +144,7 @@ async function runSession(proxyManager: ProxyManager, target: ProductTarget, job
 
       console.log(`[메인] 시도 ${i}/${ENV.MAX_RETRY} — 프록시: ${proxy.host}:${proxy.port}, 프로필: profile-${slot}`);
 
-      const context = await createPersistentContext(proxy, profileDir);
+      const context = await createPersistentContext(proxy, profileDir, slot ?? 0);
       const page = context.pages()[0] ?? await context.newPage();
 
       let pendingPolicy: RecoveryPolicy | null = null;
@@ -185,6 +187,21 @@ async function runSession(proxyManager: ProxyManager, target: ProductTarget, job
           proxy = await proxyManager.markFailed(proxy!);
         }
       } finally {
+        try {
+          const cookies = await context.cookies("https://www.coupang.com");
+          const lines = cookies.map(
+            (c) =>
+              `  ${c.name.padEnd(30)} value=${c.value.substring(0, 40).padEnd(42)} expires=${
+                c.expires === -1 ? "session" : new Date(c.expires * 1000).toISOString()
+              }`
+          );
+          const pcid = cookies.find((c) => c.name === "PCID");
+          const slotLabel = `profile-${slot}`;
+          const header = `[${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}] ${slotLabel}\nPCID = ${pcid?.value ?? "없음"}\n`;
+          const content = header + lines.join("\n") + "\n" + "─".repeat(60) + "\n";
+          if (!fs.existsSync("logs")) fs.mkdirSync("logs");
+          fs.appendFileSync("logs/cookies_detail.txt", content);
+        } catch {}
         await context.close();
       }
       if (success || exhausted) {

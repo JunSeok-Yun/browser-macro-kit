@@ -129,6 +129,13 @@ export async function incrementJobProgress(jobId: number): Promise<{ completedCo
   return { completedCount: rows[0].completed_count, targetCount: rows[0].target_count };
 }
 
+export async function incrementJobFailedCount(jobId: number): Promise<void> {
+  await pool.query(
+    `UPDATE jobs SET failed_session_count = failed_session_count + 1 WHERE id = $1`,
+    [jobId]
+  );
+}
+
 export async function completeJob(jobId: number): Promise<void> {
   await pool.query(`UPDATE jobs SET status = 'done', finished_at = now() WHERE id = $1 AND status = 'running'`, [jobId]);
 }
