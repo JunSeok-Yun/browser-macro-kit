@@ -3,10 +3,12 @@ import { createPersistentContext} from "./infra/browser";
 import { checkCreepJSTrust } from "./test/creepjs";
 import { testPortalGateway } from "./test/pixelscan";
 import { clickScanButton } from "./test/checker";
+import { checkCanvasFingerprint } from "./test/canvas";
 import { ProxyManager } from "./infra/proxyManager";
 
 // 실행 시 인자로 테스트 대상 선택: creepjs(기본값) | pixelscan
 const TARGET = process.argv[2] ?? "creepjs";
+const SLOT   = parseInt(process.argv[3] ?? "0", 10);
 
 async function main() {
   console.log(`[진단] ${TARGET} 검증 시작...`);
@@ -23,9 +25,9 @@ async function main() {
 
   console.log(`[진단] 프록시: ${proxy.host}:${proxy.port}`);
 
-  const context = await createPersistentContext(proxy, ENV.USER_DATA_ROOT);
+const context = await createPersistentContext(proxy, ENV.USER_DATA_ROOT, SLOT);
   const page = context.pages()[0] ?? (await context.newPage());
-
+  
   try {
     if (TARGET === "pixelscan") {
       const targetPage = await testPortalGateway(page);
@@ -35,6 +37,8 @@ async function main() {
       } else {
         console.error("[진단] pixelscan 진입 실패.");
       }
+    }else if (TARGET == "canvas") {
+        await checkCanvasFingerprint(page, SLOT);
     } else {
       await checkCreepJSTrust(page);
     }
