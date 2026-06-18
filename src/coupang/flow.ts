@@ -39,7 +39,7 @@ export async function runCoupangSearchFlow(
       await typeLikeHuman(page, 'input[name="q"]:visible', query);
     } else {
       await scrollToTop(page);
-      await clearSearchInput(page, currentQuery!);
+      await clearSearchInput(page);
       await typeLikeHuman(page, 'input[name="q"]:visible', query);
     }
 
@@ -67,10 +67,13 @@ export async function runCoupangSearchFlow(
         proxy,
         profileDir,
       });
-      const [productPage] = await Promise.all([
-        page.context().waitForEvent("page"),
-        moveMouseAlongCurveAndClick(page, found.locator),
-      ]);
+      // 새 탭 리스너를 먼저 등록한 뒤 클릭 (순서 중요)
+      const newPagePromise = page.context().waitForEvent("page", { timeout: 5000 }).catch(() => null);
+      await moveMouseAlongCurveAndClick(page, found.locator);
+      const newPage = await newPagePromise;
+
+      // 새 탭이 열렸으면 그 탭, 아니면 같은 탭에서 이동한 것으로 처리
+      const productPage = newPage ?? page;
       await productPage.waitForLoadState("domcontentloaded");
       await assertNotBlocked(productPage);
       await sleep(ENV.COUPANG_ENTRY_DELAY);
