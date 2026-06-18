@@ -1,29 +1,29 @@
+import { assertNotBlocked } from "../core/blockDetection";
 import { Page } from "patchright";
-import { sleep } from "../utils";
+import { sleep, gaussianRandom } from "../utils";
 
 export async function typeLikeHuman(page: Page, selector: string, text: string) {
   await page.waitForSelector(selector);
   const element = await page.$(selector);
   if (!element) throw new Error(`요소를 찾을 수 없음: ${selector}`);
 
-  await element.click(); // 먼저 입력창 클릭
-  await sleep(Math.random() * 500 + 300);
+  await element.click();
+  await sleep(gaussianRandom(400, 80, 200, 750)); // 클릭 후 입력 전 인지 지연
 
-  // 한 글자씩 쪼개서 무작위 타이핑 지연 부여
   for (const char of text) {
     await page.keyboard.type(char);
-    await sleep(Math.random() * 150 + 80); // 글자당 80ms~230ms 사이 딜레이
+    await sleep(gaussianRandom(120, 35, 40, 420)); // 120ms 중심 정규분포
   }
-  await sleep(500);
+  await sleep(gaussianRandom(450, 80, 280, 700));
 }
 
-/** 검색창에 입력된 쿼리를 한 글자씩 Backspace로 지움 */
-export async function clearSearchInput(page: Page, currentQuery: string) {
-  await page.locator('input[name="q"]:visible').first().click();
+/** 검색창 내용을 전체 선택 후 삭제 */
+export async function clearSearchInput(page: Page) {
+  await assertNotBlocked(page);
+  await sleep(gaussianRandom(250, 50, 120, 450));
   await sleep(Math.random() * 300 + 200);
-  for (let i = 0; i < currentQuery.length; i++) {
-    await page.keyboard.press("Backspace");
-    await sleep(Math.random() * 80 + 40);
-  }
-  await sleep(Math.random() * 200 + 100);
+  await sleep(gaussianRandom(75, 20, 30, 150));
+  await sleep(Math.random() * 100 + 50);
+  await page.keyboard.press("Delete");
+  await sleep(gaussianRandom(150, 40, 60, 300));
 }

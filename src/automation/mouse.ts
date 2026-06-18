@@ -1,5 +1,5 @@
 import { Page, Locator } from "patchright";
-import { sleep } from "../utils";
+import { sleep, gaussianRandom } from "../utils";
 
 /** 3차 베지어 곡선 위의 한 점 좌표 계산 (t: 0~1 진행률) */
 function bezierPoint(t: number, p0: number, p1: number, p2: number, p3: number) {
@@ -32,11 +32,29 @@ export async function moveMouseAlongCurveAndClick(page: Page, locator: Locator) 
     const x = bezierPoint(t, startX, cp1x, cp2x, targetX);
     const y = bezierPoint(t, startY, cp1y, cp2y, targetY);
     await page.mouse.move(x, y);
-    await sleep(Math.random() * 15 + 8);
+    await sleep(gaussianRandom(11, 4, 3, 30));
   }
 
-  await sleep(Math.random() * 200 + 150);
+  // 오버슈트: 이동 방향 연장선으로 2~7px 지나쳤다가 복귀
+  const dx = targetX - cp2x;
+  const dy = targetY - cp2y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len > 0) {
+    const ovDist = Math.random() * 5 + 2;
+    await page.mouse.move(
+      targetX + (dx / len) * ovDist,
+      targetY + (dy / len) * ovDist
+    );
+    await sleep(gaussianRandom(15, 5, 8, 35));
+  }
+
+  // 최종 클릭 위치: 중앙에서 ±3px 벗어남 (사람은 정중앙 클릭 안 함)
+  const clickX = targetX + (Math.random() * 6 - 3);
+  const clickY = targetY + (Math.random() * 6 - 3);
+  await page.mouse.move(clickX, clickY);
+
+  await sleep(gaussianRandom(200, 50, 100, 400));
   await page.mouse.down();
-  await sleep(Math.random() * 80 + 40);
+  await sleep(gaussianRandom(65, 20, 30, 130));
   await page.mouse.up();
 }
