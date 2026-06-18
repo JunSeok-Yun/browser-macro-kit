@@ -21,8 +21,6 @@ const PROXY_ERROR_PATTERNS = [
     "Timeout",
 ];
 
-
-
 export function classifyNavigationError(error: unknown): BlockType | null {
     const message = error instanceof Error ? error.message : String(error);
     if (PROXY_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
@@ -125,30 +123,38 @@ async function assertNotBlockedOnce(page: Page): Promise<void> {
     .locator('iframe[src*="challenge"], #px-captcha')
     .count();
     if (challenge > 0) {
-    await captureAndThrow(page, "AKAMAI_CHALLENGE 감지", "AKAMAI_CHALLENGE");
+        await captureAndThrow(page, "AKAMAI_CHALLENGE 감지", "AKAMAI_CHALLENGE");
     }
 
     const bodyText = await page.locator("body").innerText().catch(() => "");
 
-    // AKAMAI_BLOCK: Access Denied 페이지 (Akamai) / Sorry, you have been blocked (Cloudflare)
-    // link.coupang.com에 머물러 있어도 이 페이지 자체가 차단 응답일 수 있으므로 SELECTOR_BUG보다 먼저 검사
-    if (
-        /Access Denied/i.test(bodyText) ||
-        /Reference\s*[:#]\s*18\./.test(bodyText) ||
-        /Sorry, you have been blocked/i.test(bodyText) ||
-        /don't have permission to access this page/i.test(bodyText)
-    ) {
-    await captureAndThrow(page, "AKAMAI_BLOCK 감지", "AKAMAI_BLOCK");
+    // AKAMAI_IP_BLOCK: Cloudflare/Akamai IP 블랙리스트 — 뒤로가기 재시도해도 동일하게 차단됨
+    // 차단 페이지에 현재 프록시 IP가 표시되므로 파싱해 로그에 포함
+    // 1순위: Cloudflare IP 차단 (Reference 없음)
+    if (/Sorry, you have been blocked/i.test(bodyText)) {
+        await captureAndThrow(page, "Cloudflare IP 차단", "AKAMAI_IP_BLOCK");
+    }
+
+// 2순위: 쿠팡 IP 차단 (Reference : 18. 있지만 "Please contact us"로 먼저 분류)
+    if (/Please contact us for assistance/i.test(bodyText)) {
+        const ipMatch = bodyText.match(/Client IP\s*[：:]?\s*([\d.]+)/i);
+        const blockedIp = ipMatch?.[1] ?? "unknown";
+        await captureAndThrow(page, `쿠팡 IP 차단 (IP: ${blockedIp})`, "AKAMAI_IP_BLOCK");
+    }
+
+// 3순위: Akamai JS 챌린지 (1·2에 해당 안 되면 여기)
+    if (/Reference\s*[:#]\s*18\./.test(bodyText)) {
+        await captureAndThrow(page, "Akamai JS 챌린지", "AKAMAI_BLOCK");
     }
 
     // COUPANG_APP_BLOCK: RET9999
     if (/"rCode"\s*:\s*"RET9999"/.test(bodyText)) {
-    await captureAndThrow(page, "COUPANG_APP_BLOCK(RET9999) 감지", "COUPANG_APP_BLOCK");
+        await captureAndThrow(page, "COUPANG_APP_BLOCK(RET9999) 감지", "COUPANG_APP_BLOCK");
     }
 
     // SELECTOR_BUG: 위의 차단 신호 없이 link.coupang.com(애드 리다이렉트)에 머물러 있는 경우
     // → 리다이렉트가 아직 coupang.com까지 완료되지 않은 일시적 상태로 판단
     if (url.includes("link.coupang.com")) {
-    await captureAndThrow(page, `SELECTOR_BUG: ${url}`, "SELECTOR_BUG");
+        await captureAndThrow(page, `SELECTOR_BUG: ${url}`, "SELECTOR_BUG");
     }
 }
