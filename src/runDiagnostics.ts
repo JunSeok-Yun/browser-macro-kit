@@ -25,7 +25,7 @@ async function main() {
 
   console.log(`[진단] 프록시: ${proxy.host}:${proxy.port}`);
 
-const context = await createPersistentContext(proxy, ENV.USER_DATA_ROOT, SLOT);
+  const { context } = await createPersistentContext(proxy, ENV.USER_DATA_ROOT, SLOT);
   const page = context.pages()[0] ?? (await context.newPage());
   
   try {
