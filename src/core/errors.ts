@@ -19,10 +19,9 @@ export class NoLinkFoundError extends Error {
 
 export type BlockType =
   | "SELECTOR_BUG"
-  | "AKAMAI_BLOCK"      // Akamai JS 챌린지 — 5초 대기 후 재진입으로 해결 가능
-  | "AKAMAI_IP_BLOCK"   // Cloudflare/Akamai IP 블랙리스트 — 프록시 교체 필요
+  | "AKAMAI_BLOCK"      // Akamai Access Denied (Reference #18) — IP 기반 차단
+  | "AKAMAI_IP_BLOCK"   // Cloudflare/Akamai IP 블랙리스트 (Client IP 명시) — 프록시 교체 필요
   | "COUPANG_APP_BLOCK"
-  | "AKAMAI_CHALLENGE"
   | "PORTAL_CAPTCHA"
   | "PROXY_ERROR"
   | "HTTP_ERROR";

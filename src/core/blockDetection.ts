@@ -118,14 +118,6 @@ export async function assertNotBlocked(page: Page): Promise<void> {
 async function assertNotBlockedOnce(page: Page): Promise<void> {
     const url = page.url();
 
-    // AKAMAI_CHALLENGE: 챌린지 iframe 존재 여부 (...)
-    const challenge = await page
-    .locator('iframe[src*="challenge"], #px-captcha')
-    .count();
-    if (challenge > 0) {
-        await captureAndThrow(page, "AKAMAI_CHALLENGE 감지", "AKAMAI_CHALLENGE");
-    }
-
     const bodyText = await page.locator("body").innerText().catch(() => "");
 
     // AKAMAI_IP_BLOCK: Cloudflare/Akamai IP 블랙리스트 — 뒤로가기 재시도해도 동일하게 차단됨
@@ -142,9 +134,9 @@ async function assertNotBlockedOnce(page: Page): Promise<void> {
         await captureAndThrow(page, `쿠팡 IP 차단 (IP: ${blockedIp})`, "AKAMAI_IP_BLOCK");
     }
 
-// 3순위: Akamai JS 챌린지 (1·2에 해당 안 되면 여기)
+// 3순위: Akamai Access Denied — IP 기반 차단, IP 주소 미표시 (Reference #18.)
     if (/Reference\s*[:#]\s*18\./.test(bodyText)) {
-        await captureAndThrow(page, "Akamai JS 챌린지", "AKAMAI_BLOCK");
+        await captureAndThrow(page, "Akamai Access Denied (_abck 쿠키 오염 가능성)", "AKAMAI_BLOCK");
     }
 
     // COUPANG_APP_BLOCK: RET9999

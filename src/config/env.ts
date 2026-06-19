@@ -21,6 +21,8 @@ export const ENV = {
   NAV_TIMEOUT:              parseInt(process.env.NAV_TIMEOUT ?? "30000", 10),
   HTTP_ERROR_THRESHOLD:     parseInt(process.env.HTTP_ERROR_THRESHOLD ?? "3", 10),
   PROXY_FAIL_THRESHOLD:     parseInt(process.env.PROXY_FAIL_THRESHOLD ?? "2", 10),
-  CHALLENGE_RETRY_DELAY:    parseInt(process.env.CHALLENGE_RETRY_DELAY ?? "10000", 10),
-  PROFILE_LOCK_STALE_MS:    parseInt(process.env.PROFILE_LOCK_STALE_MS ?? "600000", 10)
+  PROFILE_LOCK_STALE_MS:      parseInt(process.env.PROFILE_LOCK_STALE_MS ?? "600000", 10),
+  INCOGNITO_RATIO:            parseFloat(process.env.INCOGNITO_RATIO ?? "0"),
+  EDGE_RATIO:                 parseFloat(process.env.EDGE_RATIO ?? "0"),
+  PROFILE_RESET_THRESHOLD:    parseInt(process.env.PROFILE_RESET_THRESHOLD ?? "20", 10),
 };
