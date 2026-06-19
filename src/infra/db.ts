@@ -170,9 +170,24 @@ export async function acquireProfileSlot(staleMs: number): Promise<number | null
 }
 
 /** 슬롯 반납. last_used를 갱신해 라운드로빈 순서를 유지. */
-export async function releaseProfileSlot(slot: number): Promise<void> {
+export async function releaseProfileSlot(slot: number, incrementCount = true): Promise<void> {
   await pool.query(
-    `UPDATE profile_pool SET in_use = false, last_used = now() WHERE slot = $1`,
+    incrementCount
+      ? `UPDATE profile_pool SET in_use = false, last_used = now(), session_count = session_count + 1 WHERE slot = $1`
+      : `UPDATE profile_pool SET in_use = false, last_used = now() WHERE slot = $1`,
     [slot]
   );
+}
+
+/** 슬롯의 session_count를 읽어 임계값 초과 시 0으로 리셋 후 true 반환 */
+export async function checkAndResetSessionCount(slot: number, threshold: number): Promise<boolean> {
+  const { rows } = await pool.query<{ session_count: number }>(
+    `SELECT session_count FROM profile_pool WHERE slot = $1`, [slot]
+  );
+  const count = rows[0]?.session_count ?? 0;
+  if (count >= threshold) {
+    await pool.query(`UPDATE profile_pool SET session_count = 0 WHERE slot = $1`, [slot]);
+    return true;
+  }
+  return false;
 }
