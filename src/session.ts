@@ -1,0 +1,211 @@
+import * as fs from "fs";
+import { ENV } from "./config/env";
+import { createPersistentContext, createIncognitoContext, clearProfileCache, profileDirForSlot } from "./infra/browser";
+import { runPortalGateway } from "./gateway";
+import { ProductNotFoundError, BlockDetectedError, NoLinkFoundError } from "./core/errors";
+import { BLOCK_RECOVERY, RecoveryPolicy } from "./core/recovery";
+import { ProxyManager, ProxyEntry } from "./infra/proxyManager";
+import { logBlock, acquireProfileSlot, releaseProfileSlot, checkAndResetSessionCount } from "./infra/db";
+import { ProductTarget } from "./core/types";
+import { BrowserContext } from "patchright";
+import { sleep } from "./utils";
+import * as logger from "./infra/logger";
+
+
+const SLOT_RETRY_DELAY_MS = 5000;
+
+async function logCookies(context: BrowserContext, slot: number): Promise<void> {
+    try {
+        const cookies = await context.cookies("https://www.coupang.com");
+        const lines = cookies.map(
+        (c) => `  ${c.name.padEnd(30)} value=${c.value.substring(0, 40).padEnd(42)} expires=${
+          c.expires === -1 ? "session" : new Date(c.expires * 1000).toISOString()}`);
+        const pcid = cookies.find((c) => c.name === "PCID");
+        const header = `[${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}] profile-${slot}\nPCID = ${pcid?.value ?? "없음"}\n`;
+        const content = header + lines.join("\n") + "\n" + "─".repeat(60) + "\n";
+        if (!fs.existsSync("logs")) fs.mkdirSync("logs");
+            fs.appendFileSync("logs/cookies_detail.txt", content);
+        } catch {}
+    }
+
+async function acquireProfileSlotWithRetry(): Promise<number> {
+    while (true) {
+        const slot = await acquireProfileSlot(ENV.PROFILE_LOCK_STALE_MS);
+        if (slot !== null) return slot;
+        logger.warn("[세션] 모든 프로필 슬롯 사용 중. 5초 후 재시도...");
+        await sleep(SLOT_RETRY_DELAY_MS);
+    }
+}
+
+async function applyRecoveryPolicy(
+    policy: RecoveryPolicy,
+    proxy: ProxyEntry,
+    profileDir: string,
+    proxyManager: ProxyManager
+): Promise<ProxyEntry | null> {
+    if (policy.rotateProxy) {
+        proxy = (await proxyManager.markFailed(proxy))!;
+    }
+    if (policy.rotateProfile) {
+        try {
+            fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+        } catch (err) {
+            logger.warn(`[세션] 프로필 폴더 삭제 실패 (${profileDir}): ${String(err)}`);
+        }
+    }
+    if (policy.extraDelayMs) {
+        await sleep(policy.extraDelayMs);
+    }
+    return proxy;
+}
+
+export async function runSession(
+    proxyManager: ProxyManager,
+    target: ProductTarget,
+    jobId: number
+): Promise<boolean> {
+    const usedQueries = new Set<string>();
+    let success = false;
+    let proxy = proxyManager.getRandom();
+    const useIncognito = Math.random() < ENV.INCOGNITO_RATIO;
+    const channel = useIncognito ? "chrome"
+    : (Math.random() < ENV.EDGE_RATIO ? "msedge" : "chrome") as "chrome" | "msedge";
+    const slot = await acquireProfileSlotWithRetry();
+    const profileDir = profileDirForSlot(slot);
+    let httpErrorStreak = 0;
+
+    logger.info(`[세션] 모드: ${useIncognito ? "시크릿" : `영구(${channel})`}, slot: ${slot}`, {
+        event: "SESSION_MODE",
+        useIncognito,
+        channel,
+        slot,
+    });
+
+    try {
+        for (let i = 1; i <= ENV.MAX_RETRY; i++) {
+        if (!proxy) {
+            logger.error("[세션] 사용 가능한 프록시가 없습니다. 종료합니다.", { event: "NO_PROXY", slot });
+            break;
+        }
+
+        logger.info(
+            `[메인] 시도 ${i}/${ENV.MAX_RETRY} — 프록시: ${proxy.host}:${proxy.port}, 프로필: profile-${slot}`,
+            { event: "SESSION_ATTEMPT", attempt: i, maxRetry: ENV.MAX_RETRY, proxy: `${proxy.host}:${proxy.port}`, slot }
+        );
+
+                let context: BrowserContext;
+        let chromePid: number | null = null;
+        let tempDir: string | null = null;
+
+        if (useIncognito) {
+            const result = await createIncognitoContext(proxy, slot);
+            context = result.context;
+            chromePid = result.chromePid;
+            tempDir = result.tempDir;
+        } else {
+            const result = await createPersistentContext(proxy, profileDir, slot, channel);
+            context = result.context;
+            chromePid = result.chromePid;
+        }
+        const page = context.pages()[0] ?? await context.newPage();
+
+
+        let pendingPolicy: RecoveryPolicy | null = null;
+        let exhausted = false;
+
+        try {
+            const result = await runPortalGateway(page, target, usedQueries, proxy, profileDir, jobId);
+            if (result) {
+            logger.info("[메인] 쿠팡 진입 성공!", {
+                event: "SESSION_SUCCESS", proxy: `${proxy.host}:${proxy.port}`, slot,
+            });
+            await proxyManager.markSuccess(proxy);
+            success = true;
+            } else {
+            logger.warn(`[메인] 쿠팡 진입 실패. 프록시 ${proxy.host}:${proxy.port} 교체합니다.`, {
+                event: "PORTAL_FAIL", proxy: `${proxy.host}:${proxy.port}`, slot,
+            });
+            proxy = await proxyManager.markFailed(proxy);
+            }
+        } catch (error) {
+            if (error instanceof ProductNotFoundError) {
+            error.usedQueries.forEach(q => usedQueries.add(q));
+            logger.error(`[메인] 모든 검색 쿼리 소진. 종료합니다.`, {
+                event: "QUERIES_EXHAUSTED", usedQueries: [...error.usedQueries], slot,
+            });
+            exhausted = true;
+            } else if (error instanceof NoLinkFoundError) {
+            logger.warn(`[메인] ${error.message}`, {
+                event: "NO_LINK", proxy: proxy ? `${proxy.host}:${proxy.port}` : null, slot,
+            });
+            } else if (error instanceof BlockDetectedError) {
+            logger.error(`[메인] 차단 감지 (${error.type}): ${error.message}`, {
+                event: "BLOCK_DETECTED", blockType: error.type,
+                proxy: proxy ? `${proxy.host}:${proxy.port}` : null, slot, htmlPath: error.htmlPath ?? null,
+            });
+            await logBlock(proxy, error.type, error.message, error.htmlPath, profileDir);
+            if (error.type === "HTTP_ERROR") {
+                httpErrorStreak++;
+                if (httpErrorStreak >= ENV.HTTP_ERROR_THRESHOLD) {
+                proxy = await proxyManager.markFailed(proxy!);
+                httpErrorStreak = 0;
+                }
+            } else {
+                pendingPolicy = BLOCK_RECOVERY[error.type];
+            }
+            } else {
+            logger.error(`[메인] 시도 ${i} 중 에러 발생: ${String(error)}`, {
+                event: "UNKNOWN_ERROR", attempt: i,
+                proxy: proxy ? `${proxy.host}:${proxy.port}` : null, slot, errorMessage: String(error),
+            });
+                proxy = await proxyManager.markFailed(proxy!);
+            }
+        } finally {
+            await logCookies(context, slot);
+            await context.close();
+            if (chromePid) {
+                try { process.kill(chromePid); } catch {}
+            }
+            if (tempDir) {
+                try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+            }
+        }
+
+            if (success || exhausted) break;
+            if (pendingPolicy) {
+                if (useIncognito) {
+                // 시크릿: 매 iteration이 이미 새 tempDir → rotateProfile 자동 충족
+                // 프록시 교체만 적용
+                if (pendingPolicy.rotateProxy) proxy = (await proxyManager.markFailed(proxy!))!;
+                if (pendingPolicy.extraDelayMs) await sleep(pendingPolicy.extraDelayMs);
+                } else {
+                proxy = await applyRecoveryPolicy(pendingPolicy, proxy!, profileDir, proxyManager);
+                }
+            }
+        }
+        } finally {
+            if (!useIncognito) clearProfileCache(profileDir);
+            await releaseProfileSlot(slot, !useIncognito);
+            if (!useIncognito) {
+                const needsReset = await checkAndResetSessionCount(slot, ENV.PROFILE_RESET_THRESHOLD);
+                if (needsReset) {
+                try {
+                    fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+                    logger.info(`[세션] profile-${slot} ${ENV.PROFILE_RESET_THRESHOLD}회 도달 → 프로필 초기화`, {
+                    event: "PROFILE_RESET_BY_COUNT", slot,
+                    });
+                } catch (err) {
+                    logger.warn(`[세션] 프로필 초기화 실패: ${String(err)}`);
+                }
+            }
+        }
+    }
+
+        if (!success) {
+        logger.error(`[메인] ${ENV.MAX_RETRY}회 시도 모두 실패. 세션을 종료합니다.`, {
+            event: "SESSION_FAIL", maxRetry: ENV.MAX_RETRY, slot,
+        });
+    }
+
+        return success;
+    }

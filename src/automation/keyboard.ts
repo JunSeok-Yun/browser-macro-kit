@@ -1,4 +1,3 @@
-import { assertNotBlocked } from "../core/blockDetection";
 import { Page } from "patchright";
 import { sleep, gaussianRandom } from "../utils";
 
@@ -19,7 +18,6 @@ export async function typeLikeHuman(page: Page, selector: string, text: string) 
 
 /** 검색창 내용을 전체 선택 후 삭제 */
 export async function clearSearchInput(page: Page) {
-  await assertNotBlocked(page);
   await sleep(gaussianRandom(250, 50, 120, 450));
   await sleep(Math.random() * 300 + 200);
   await sleep(gaussianRandom(75, 20, 30, 150));

@@ -1,5 +1,5 @@
-import { Page, Locator } from "patchright";
-import { ProductTarget, ProductItem } from "../core/types";
+import { Page} from "patchright";
+import { ProductTarget, ProductItem, FoundProduct } from "../core/types";
 import { getQueryFailCount } from "../infra/db";
 
 export async function buildSearchQuery(
@@ -35,18 +35,13 @@ export async function buildSearchQuery(
   return pairs[pairs.length - 1];
 }
 
-export function extractProductId(href: string): string | null {
+function extractProductId(href: string): string | null {
   const match = href.match(/\/vp\/products\/(\d+)/);
   return match ? match[1] : null;
 }
 
-export function normalizeProductText(raw: string): string {
+function normalizeProductText(raw: string): string {
   return raw.replace(/\s+/g, " ").trim();
-}
-
-export interface FoundProduct {
-  locator: Locator;
-  matchedName: string;
 }
 
 export async function findTargetProduct(page: Page, product: ProductItem): Promise<FoundProduct | null> {

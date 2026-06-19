@@ -113,3 +113,11 @@ export const DEFAULT_TARGET: ProductTarget = {
     }
   ],
 };
+
+export function buildTargetForCategory(category: string): ProductTarget {
+  return {
+    brand: DEFAULT_TARGET.brand,
+    products: DEFAULT_TARGET.products.filter((p) => p.category === category),
+  };
+}
+
