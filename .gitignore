@@ -9,3 +9,5 @@ chrome-profile/
 user-data*/
 data/**
 debug-html/
+dist/
+logs/
