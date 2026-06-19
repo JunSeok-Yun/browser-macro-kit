@@ -5,6 +5,7 @@ import { typeLikeHuman } from "../automation/keyboard";
 import { sleep } from "../utils";
 import { saveDebugHtml } from "../infra/debugCapture";
 import { NoLinkFoundError } from "../core/errors";
+import * as logger from "../infra/logger";
 
 const GOOGLE_COUPANG_SELECTOR = [
   'a:has-text("쿠팡"):not([href*="link.coupang.com"])',
@@ -17,7 +18,7 @@ export async function enterCoupangFromGoogleResults(page: Page): Promise<void> {
   const googleResultLink = page.locator(GOOGLE_COUPANG_SELECTOR).first();
 
   const elementCount = await googleResultLink.count();
-  console.log(`[Gateway] 구글 내 매칭된 링크 요소 개수: ${elementCount}개`);
+  logger.info(`[Gateway] 매칭된 링크 요소 개수: ${elementCount}개`);
 
   if (elementCount === 0) {
     const html = await page.content();
@@ -28,7 +29,7 @@ export async function enterCoupangFromGoogleResults(page: Page): Promise<void> {
     );
   }
 
-  console.log("[Gateway] 링크 클릭 후 쿠팡 로딩을 대기합니다...");
+  logger.info("[Gateway] 링크 클릭 후 쿠팡 로딩을 대기합니다...");
 
   await withNavigationErrorHandling(() =>
     Promise.all([
@@ -41,7 +42,7 @@ export async function enterCoupangFromGoogleResults(page: Page): Promise<void> {
 }
 
 export async function runGoogleGateway(page: Page): Promise<Page> {
-  console.log("[Gateway] 구글을 통해 쿠팡 진입을 시도합니다.");
+  logger.info("[Gateway] 구글을 통해 쿠팡 진입을 시도합니다.");
 
   await safeGoto(page, "https://www.google.com", { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
   await page.waitForTimeout(
@@ -55,7 +56,7 @@ export async function runGoogleGateway(page: Page): Promise<Page> {
   await sleep(ENV.GOOGLE_SEARCH_DELAY);
   await assertPortalNotBlocked(page, "google");
 
-  console.log("[Gateway] 구글 검색 결과에서 실제 이동 가능한 쿠팡 링크 요소를 탐색합니다.");
+  logger.info("[Gateway] 구글 검색 결과에서 실제 이동 가능한 쿠팡 링크 요소를 탐색합니다.");
   await enterCoupangFromGoogleResults(page);
 
   return page;
