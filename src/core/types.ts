@@ -1,3 +1,5 @@
+import { Locator } from "patchright";
+
 export interface ProductItem {
   productId: string;
   category: string;
@@ -16,4 +18,9 @@ export interface Job {
   targetCount: number;
   completedCount: number;
   status: "running" | "done";
+}
+
+export interface FoundProduct {
+  locator: Locator;
+  matchedName: string;
 }
