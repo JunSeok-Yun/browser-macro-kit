@@ -7,8 +7,10 @@ export const ENV = {
   PROXY_FILE_PATH: path.resolve(process.cwd(), process.env.PROXY_FILE_PATH ?? "proxies.txt"),
   DEBUG_HTML_DIR: path.resolve(process.cwd(), process.env.DEBUG_HTML_DIR ?? "./debug-html"),
   HEADLESS:     process.env.HEADLESS === "true",
-  NAVER_RATIO:  parseFloat(process.env.NAVER_RATIO ?? "0.5"),
-
+  NAVER_RATIO:  parseFloat(process.env.NAVER_RATIO ?? "0.35"),
+  GOOGLE_RATIO: parseFloat(process.env.GOOGLE_RATIO ?? "0.35"),
+  DAUM_RATIO:   parseFloat(process.env.DAUM_RATIO ?? "0.15"),
+  
   // 타이밍 (ms)
   NAVER_ENTRY_DELAY:        parseInt(process.env.NAVER_ENTRY_DELAY ?? "2000", 10),
   NAVER_SEARCH_DELAY:       parseInt(process.env.NAVER_SEARCH_DELAY ?? "3000", 10),
@@ -24,5 +26,7 @@ export const ENV = {
   PROFILE_LOCK_STALE_MS:      parseInt(process.env.PROFILE_LOCK_STALE_MS ?? "600000", 10),
   INCOGNITO_RATIO:            parseFloat(process.env.INCOGNITO_RATIO ?? "0"),
   EDGE_RATIO:                 parseFloat(process.env.EDGE_RATIO ?? "0"),
-  PROFILE_RESET_THRESHOLD:    parseInt(process.env.PROFILE_RESET_THRESHOLD ?? "20", 10),
+  PROFILE_RESET_THRESHOLD: parseInt(process.env.PROFILE_RESET_THRESHOLD ?? "20", 10),
+  ADD_TO_CART_RATIO:        parseFloat(process.env.ADD_TO_CART_RATIO ?? "0.2"),
+  LOG_BEACONS:       process.env.LOG_BEACONS === "true",
 };
