@@ -59,18 +59,19 @@ async function launchContext(
 
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: ENV.HEADLESS,
-    channel,                              // ← channel 파라미터 사용
+    channel,
     proxy: { server: `http://${proxy.host}:${proxy.port}` },
     viewport: null,
     locale: "ko-KR",
     timezoneId: "Asia/Seoul",
     args: [
+
       `--window-size=${w},${h}`,
       "--disable-blink-features=AutomationControlled",
       "--remote-debugging-port=0",
       "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
       "--disable-popup-blocking",
-      "--disable-dev-shm-usage",
+      "--disk-cache-size=10485760",
     ],
   });
 
