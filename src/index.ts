@@ -66,7 +66,6 @@ async function main() {
     }
   } finally {
     await listenClient.end();
-    proxyManager.destroy();
     console.log("[메인] 종료.");
   }
 
