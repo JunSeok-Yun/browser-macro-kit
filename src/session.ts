@@ -10,23 +10,10 @@ import { ProductTarget } from "./core/types";
 import { BrowserContext } from "patchright";
 import { sleep } from "./utils";
 import * as logger from "./infra/logger";
-
+import { attachNetworkCapture } from "./infra/networkCapture";
 
 const SLOT_RETRY_DELAY_MS = 5000;
-
-async function logCookies(context: BrowserContext, slot: number): Promise<void> {
-    try {
-        const cookies = await context.cookies("https://www.coupang.com");
-        const lines = cookies.map(
-        (c) => `  ${c.name.padEnd(30)} value=${c.value.substring(0, 40).padEnd(42)} expires=${
-          c.expires === -1 ? "session" : new Date(c.expires * 1000).toISOString()}`);
-        const pcid = cookies.find((c) => c.name === "PCID");
-        const header = `[${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}] profile-${slot}\nPCID = ${pcid?.value ?? "없음"}\n`;
-        const content = header + lines.join("\n") + "\n" + "─".repeat(60) + "\n";
-        if (!fs.existsSync("logs")) fs.mkdirSync("logs");
-            fs.appendFileSync("logs/cookies_detail.txt", content);
-        } catch {}
-    }
+let _firstSessionDone = false;
 
 async function acquireProfileSlotWithRetry(): Promise<number> {
     while (true) {
@@ -81,8 +68,24 @@ export async function runSession(
         slot,
     });
 
+    if (!_firstSessionDone) {
+        // 1회차: 슬롯 기반 결정론적 시차 (2~31초) — 다중 인스턴스 초기 분산
+        const staggerMs = (slot % 20) * 1500 + 2000 + Math.floor(Math.random() * 300);
+        logger.info(`[세션] 슬롯 ${slot}: 시차 대기 ${staggerMs}ms`, {
+            event: "SESSION_STAGGER",
+            slot,
+            staggerMs,
+        });
+        await sleep(staggerMs);
+        _firstSessionDone = true;
+    } else {
+        // 2회차~: 재동기화 방지 랜덤 지터 (1~4초)
+        await sleep(Math.floor(Math.random() * 3000) + 1000);
+    }
+
     try {
         for (let i = 1; i <= ENV.MAX_RETRY; i++) {
+
         if (!proxy) {
             logger.error("[세션] 사용 가능한 프록시가 없습니다. 종료합니다.", { event: "NO_PROXY", slot });
             break;
@@ -93,7 +96,7 @@ export async function runSession(
             { event: "SESSION_ATTEMPT", attempt: i, maxRetry: ENV.MAX_RETRY, proxy: `${proxy.host}:${proxy.port}`, slot }
         );
 
-                let context: BrowserContext;
+        let context: BrowserContext;
         let chromePid: number | null = null;
         let tempDir: string | null = null;
 
@@ -108,6 +111,7 @@ export async function runSession(
             chromePid = result.chromePid;
         }
         const page = context.pages()[0] ?? await context.newPage();
+        const flushNetworkLog = attachNetworkCapture(context, slot);
 
 
         let pendingPolicy: RecoveryPolicy | null = null;
@@ -161,7 +165,7 @@ export async function runSession(
                 proxy = await proxyManager.markFailed(proxy!);
             }
         } finally {
-            await logCookies(context, slot);
+            flushNetworkLog();
             await context.close();
             if (chromePid) {
                 try { process.kill(chromePid); } catch {}
