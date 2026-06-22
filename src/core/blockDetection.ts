@@ -64,7 +64,7 @@ export async function withNavigationErrorHandling<T>(action: () => Promise<T>): 
     }
 }
 
-export type PortalType = "naver" | "google";
+export type PortalType = "naver" | "google" | "daum" | "nate";
 
 /** 현재 페이지 HTML을 캡처해 저장한 뒤 BlockDetectedError를 던짐 */
 async function captureAndThrow(page: Page, message: string, type: BlockType): Promise<never> {
@@ -98,7 +98,20 @@ export async function assertPortalNotBlocked(page: Page, portal: PortalType): Pr
         await captureAndThrow(page, "PORTAL_CAPTCHA: 네이버 비정상 접근 감지", "PORTAL_CAPTCHA");
         }
     }
+
+    if (portal === "daum" || portal === "nate") {
+        const url = page.url();
+        // 카카오 계정 인증 페이지로 리다이렉트 된 경우
+        if (url.includes("accounts.kakao.com")) {
+            await captureAndThrow(page, `PORTAL_CAPTCHA: ${portal} 카카오 인증 페이지 감지`, "PORTAL_CAPTCHA");
+        }
+        const bodyText = await page.locator("body").innerText().catch(() => "");
+        if (/자동\s*입력\s*방지|비정상적인.*(접근|검색|트래픽)/.test(bodyText)) {
+            await captureAndThrow(page, `PORTAL_CAPTCHA: ${portal} 봇 차단 감지`, "PORTAL_CAPTCHA");
+        }
+    }
 }
+
 
 export async function assertNotBlocked(page: Page): Promise<void> {
     try {
