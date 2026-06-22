@@ -67,10 +67,6 @@ export async function getQueryFailCount(query: string): Promise<number> {
   return rows[0]?.fail_count ?? 0;
 }
 
-export async function resetProxyStats(): Promise<void> {
-  await pool.query(`DELETE FROM proxy_stats`);
-}
-
 // --- 신규: session_log (성공/실패 모두 기록, 상품별 통계용) ---
 
 export async function logSession(params: {

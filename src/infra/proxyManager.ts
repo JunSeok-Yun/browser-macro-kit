@@ -1,6 +1,6 @@
 import { ENV } from "../config/env";
 import * as fs from "fs";
-import { getBlacklistedProxies, recordProxyResult, resetProxyStats } from "./db";
+import { getBlacklistedProxies, recordProxyResult } from "./db";
 
 export interface ProxyEntry {
   host: string;
@@ -62,18 +62,21 @@ export class ProxyManager {
   // 파일 변경 감지 함수
   // fs.watch는 변경 이벤트가 연속으로 중복 발생할 수 있어서 debounce 처리
   private watchFile() {
-    if (!fs.existsSync(this.filePath)) return;
+      if (!fs.existsSync(this.filePath)) return;
 
-    this.watcher = fs.watch(this.filePath, () => {
-      if (this.reloadTimer) clearTimeout(this.reloadTimer);
-      this.reloadTimer = setTimeout(async () => {
-        console.log("[ProxyManager] 프록시 파일 변경 감지 → 리로드합니다.");
-        this.blacklist.clear();
-        this.reload();
-        await resetProxyStats(); // proxy_stats 초기화 — IP 풀이 바뀌었으므로 과거 평가 무효화
-        console.log("[ProxyManager] proxy_stats 초기화 완료. 새 프록시 풀로 시작합니다.");
-      }, 300);
-    });
+      let lastMtime = fs.statSync(this.filePath).mtimeMs;
+
+      this.watcher = fs.watch(this.filePath, () => {
+        if (this.reloadTimer) clearTimeout(this.reloadTimer);
+        this.reloadTimer = setTimeout(() => {
+          const currentMtime = fs.statSync(this.filePath).mtimeMs;
+          if (currentMtime === lastMtime) return; // 읽기만 한 경우 무시
+          lastMtime = currentMtime;
+          console.log("[ProxyManager] 프록시 파일 변경 감지 → 리로드합니다.");
+          this.blacklist.clear();
+          this.reload();
+        }, 300);
+      });
   }
 
   // 랜덤한 프록시 반환 함수
@@ -102,10 +105,5 @@ export class ProxyManager {
 
   get count(): number {
     return this.proxies.length - this.blacklist.size;
-  }
-
-  destroy() {
-    if (this.reloadTimer) clearTimeout(this.reloadTimer);
-    this.watcher?.close();
   }
 }
