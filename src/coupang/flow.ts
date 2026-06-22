@@ -4,7 +4,7 @@ import { ProductTarget } from "../core/types";
 import { ProductNotFoundError, BlockDetectedError } from "../core/errors";
 import { ENV } from "../config/env";
 import { typeLikeHuman, clearSearchInput } from "../automation/keyboard";
-import { randomScrollDwell, scrollToTop } from "../automation/scroll";
+import { randomScrollDwell, scrollToTop, deepScrollToBottom } from "../automation/scroll";
 import { moveMouseAlongCurveAndClick } from "../automation/mouse";
 import { buildSearchQuery, findTargetProduct } from "./search";
 import { assertNotBlocked } from "../core/blockDetection";
@@ -12,6 +12,90 @@ import { saveDebugHtml } from "../infra/debugCapture";
 import { recordQueryResult, logSession } from "../infra/db";
 import { ProxyEntry } from "../infra/proxyManager";
 import * as logger from "../infra/logger";
+
+async function runProductPageInteraction(
+  page: Page,
+  proxy: ProxyEntry | null,
+  profileDir: string,
+): Promise<void> {
+  // 1. 상단 체류 (가격/옵션 확인)
+  await sleep(Math.random() * 2000 + 2000);
+
+  // 2. "상품정보 더보기" 버튼 클릭
+  try {
+    const moreBtn = page
+      .locator('button:has-text("상품정보 더보기"), a:has-text("상품정보 더보기")')
+      .first();
+    if ((await moreBtn.count()) > 0) {
+      await moreBtn.scrollIntoViewIfNeeded();
+      await sleep(Math.random() * 500 + 300);
+      await moreBtn.click();
+      await sleep(Math.random() * 1000 + 1000);
+      logger.info("[Behavior] '상품정보 더보기' 클릭", {
+        event: "PRODUCT_DETAIL_EXPANDED",
+        slot: logger.slotFrom(profileDir),
+      });
+    }
+  } catch {
+    // 버튼 없거나 클릭 실패 → 무시
+  }
+
+  // 3. 끝까지 스크롤
+  await deepScrollToBottom(page);
+  await sleep(Math.random() * 800 + 500);
+
+  // 4. 리뷰 탭 클릭 (리뷰 영역 진입 신호 발생)
+  try {
+    const reviewTab = page
+      .locator('a:has-text("리뷰"), li[data-tab="review"]')
+      .first();
+    if ((await reviewTab.count()) > 0) {
+      await reviewTab.scrollIntoViewIfNeeded();
+      await sleep(Math.random() * 400 + 300);
+      await reviewTab.click();
+      await sleep(Math.random() * 800 + 500);
+      await page.mouse.wheel(0, Math.floor(Math.random() * 400) + 200);
+      await sleep(Math.random() * 600 + 400);
+      logger.info("[Behavior] 리뷰 탭 클릭", {
+        event: "REVIEW_TAB_CLICKED",
+        slot: logger.slotFrom(profileDir),
+      });
+    }
+  } catch {
+    // 탭 없거나 클릭 실패 → 무시
+  }
+
+  // 5. 랜덤 장바구니 담기
+  if (Math.random() < ENV.ADD_TO_CART_RATIO) {
+    try {
+      await scrollToTop(page);
+      await sleep(Math.random() * 800 + 500);
+
+      // CSS 클래스 기반 우선 (text 매칭보다 빠름)
+      const cartBtn = page
+        .locator('button.prod-cart-btn, button:has-text("장바구니 담기")')
+        .first();
+      if ((await cartBtn.count()) > 0) {
+        await cartBtn.click();
+        // 토스트 성공 메시지 확인 후 닫기
+        await page
+          .locator('div.cart-success-message, .prod-cart-confirmation')
+          .waitFor({ state: "visible", timeout: 3000 })
+          .catch(() => {});
+        await page.keyboard.press("Escape");
+        await sleep(Math.random() * 400 + 200);
+        logger.info("[Behavior] 장바구니 담기 완료", {
+          event: "ADD_TO_CART",
+          slot: logger.slotFrom(profileDir),
+          proxy: proxy ? `${proxy.host}:${proxy.port}` : null,
+        });
+      }
+    } catch {
+      // 클릭 실패 → 무시
+    }
+  }
+}
+
 
 export async function runCoupangSearchFlow(
   page: Page,
@@ -150,7 +234,7 @@ export async function runCoupangSearchFlow(
           throw blockErr;
         }
         await sleep(ENV.COUPANG_ENTRY_DELAY);
-        await randomScrollDwell(productPage);
+        await runProductPageInteraction(productPage, proxy, profileDir);
         return;
       }
 
