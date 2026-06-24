@@ -69,8 +69,8 @@ export async function runSession(
     });
 
     if (!_firstSessionDone) {
-        // 1회차: 슬롯 기반 결정론적 시차 (2~31초) — 다중 인스턴스 초기 분산
-        const staggerMs = (slot % 20) * 1500 + 2000 + Math.floor(Math.random() * 300);
+        // 1회차: 슬롯 기반 결정론적 시차 (1~21초) — 다중 인스턴스 초기 분산
+        const staggerMs = (slot % 20) * 1000 + 1000 + Math.floor(Math.random() * 200);
         logger.info(`[세션] 슬롯 ${slot}: 시차 대기 ${staggerMs}ms`, {
             event: "SESSION_STAGGER",
             slot,
@@ -80,7 +80,7 @@ export async function runSession(
         _firstSessionDone = true;
     } else {
         // 2회차~: 재동기화 방지 랜덤 지터 (1~4초)
-        await sleep(Math.floor(Math.random() * 3000) + 1000);
+        await sleep(Math.floor(Math.random() * 1500) + 500);
     }
 
     try {
