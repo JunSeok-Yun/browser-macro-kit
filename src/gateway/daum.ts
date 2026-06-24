@@ -67,7 +67,7 @@ export async function enterCoupangFromDaumResults(page: Page): Promise<Page> {
 
 export async function runDaumGateway(page: Page): Promise<Page> {
     logger.info("[Gateway] 다음을 통해 쿠팡 진입을 시도합니다.");
-    await safeGoto(page, "https://www.daum.net", { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
+    await safeGoto(page, "https://www.daum.net", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
     await sleep(ENV.GOOGLE_ENTRY_DELAY_MIN + Math.floor(Math.random() * ENV.GOOGLE_ENTRY_DELAY_RANGE));
     await typeLikeHuman(page, 'input[name="q"]', "쿠팡");
     await page.keyboard.press("Enter");

@@ -46,7 +46,7 @@ await withNavigationErrorHandling(() =>
 
 export async function runNaverGateway(page: Page): Promise<Page> {
   logger.info("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
-  await safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
+  await safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
   await sleep(ENV.NAVER_ENTRY_DELAY);
 
   await typeLikeHuman(page, "#query", "쿠팡");

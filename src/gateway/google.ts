@@ -44,7 +44,7 @@ export async function enterCoupangFromGoogleResults(page: Page): Promise<void> {
 export async function runGoogleGateway(page: Page): Promise<Page> {
   logger.info("[Gateway] 구글을 통해 쿠팡 진입을 시도합니다.");
 
-  await safeGoto(page, "https://www.google.com", { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
+  await safeGoto(page, "https://www.google.com", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
   await page.waitForTimeout(
     Math.floor(Math.random() * ENV.GOOGLE_ENTRY_DELAY_RANGE) + ENV.GOOGLE_ENTRY_DELAY_MIN
   );

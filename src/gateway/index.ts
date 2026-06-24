@@ -108,7 +108,7 @@ export async function runPortalGateway(
             proxy: proxy ? `${proxy.host}:${proxy.port}` : null,
             slot: logger.slotFrom(profileDir),
           });
-          await safeGoto(targetPage, searchUrl, { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
+          await safeGoto(targetPage, searchUrl, { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
           await sleep(ENV.GOOGLE_SEARCH_DELAY);
           await assertPortalNotBlocked(targetPage, activePortal);
           if (activePortal === "google") await enterCoupangFromGoogleResults(targetPage);
