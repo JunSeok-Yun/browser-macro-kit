@@ -139,6 +139,32 @@ proxies.txt             - HaiIP "IP 저장" 버튼으로 생성되는 프록시 
   - `session.ts`에서 context 생성 직후 연결, finally에서 flush
   - `network-logs/session_slot{N}_{ts}.json`으로 저장
 
+### 5.3단계 - 버그 수정 (2026-06-24 완료)
+
+**Job 51 로그 분석 (등갈비, 330회 목표, 5시간 40분, 성공률 87.1%)에서 발견된 문제:**
+
+| 에러 | 횟수 | 원인 |
+|------|------|------|
+| `PROXY_ERROR` | 166 | 포털 진입 시 `net::ERR_TIMED_OUT` (30초 대기) |
+| `FLOW_UNKNOWN_ERROR` | 157 | 2번째 쿠팡 검색 전 AKAMAI_BLOCK 미감지 → `input[name="q"]:visible` 30초 타임아웃 |
+| `AKAMAI_IP_BLOCK` | 110 | IP 블랙리스트 누적 |
+
+- [x] **`flow.ts` — 2번째 검색 전 `assertNotBlocked` 추가**
+  - `i > 0` 재검색 분기에서 `scrollToTop` 직후 `assertNotBlocked(page)` 호출
+  - AKAMAI_BLOCK 페이지에서 `input[name="q"]`를 30초 찾다 FLOW_UNKNOWN_ERROR로 잡히던 문제 해소
+  - 정상적으로 `BlockDetectedError(AKAMAI_BLOCK)` 분류 → recovery 정책 적용
+
+- [x] **`keyboard.ts` — `clearSearchInput` 개선**
+  - 기존: sleep만 하고 포커스 없이 Delete만 누름 (아무것도 안 함)
+  - 수정: `input[name="q"]:visible` 클릭 → `Ctrl+A` → `Delete`
+  - input이 없으면 즉시 return (AKAMAI_BLOCK 페이지 방어)
+
+- [x] **`env.ts` + gateway 5개 파일 — `PORTAL_TIMEOUT=15000` 분리**
+  - 포털 메인 진입 `safeGoto`에만 15초 적용 (기존 30초 → 15초)
+  - 대상: `naver.ts`, `google.ts`, `daum.ts`, `nate.ts`, `gateway/index.ts`(AKAMAI_BLOCK 재진입)
+  - 쿠팡 내부 이동(`waitForURL` 등)은 `NAV_TIMEOUT` 유지
+  - 효과: PROXY_ERROR × 15초 절약 (에러율 개선 아님, 처리량 개선)
+
 ## 차단 유형 분류 및 복구 전략
 
 (`core/recovery.ts`의 `BLOCK_RECOVERY` 테이블)
@@ -198,15 +224,16 @@ const channel = useIncognito ? "chrome"
 
 **결론**: 쿠팡 UV 기준은 **하드웨어 지문(WebGL GPU 렌더러 등)** 우선. 동일 VM = 동일 하드웨어 = UV 1.
 
-### UV 수 증가 방안 (검토 중)
+### UV 수 증가 방안 (확정)
 
-- **AdsPower 안티디텍트 브라우저**: 프로필마다 다른 WebGL GPU 메타데이터 스푸핑
-  - 2026-06-21: 프로필 2개 생성 (NVIDIA GTX 1050 / Intel UHD 630 각각), 수동 4회 테스트 완료
-  - 2026-06-22: 판매자 대시보드에서 방문자 수 변화 확인 예정
-  - 증가 시 → AdsPower API 연동 구현 (`/api/v1/browser/start` → CDP 연결)
-  - 변화 없음 → VM 추가 (하드웨어 수준 분리) 필요
+- **AdsPower 안티디텍트 브라우저 테스트 (2026-06-22, 실패)**:
+  - 프로필 2개 (NVIDIA GTX 1050 / Intel UHD 630) 수동 4회 테스트 완료
+  - 결과: 방문자 1, 조회수 4 — UV 증가 없음
+  - 원인: Akamai는 GPU 렌더러 문자열이 아닌 실제 렌더링 성능/타이밍을 측정. 스푸핑 무효
 
-- **주의**: AdsPower 프로필 지문은 고정이어야 함 (`_abck`가 지문과 함께 누적되므로 매 세션 UA/WebGL 변경 시 AKAMAI_BLOCK 위험)
+- **결론: VM 추가로 방향 확정** — 동일 물리 하드웨어에서는 어떤 소프트웨어 스푸핑도 UV 분리 불가
+  - VM 1대 = 독립 하드웨어 지문 = UV 1 추가 가능
+  - AdsPower 연동 구현 보류
 
 ## 주요 설계 결정
 
@@ -293,6 +320,7 @@ COUPANG_ENTRY_DELAY=4000
 COUPANG_SEARCH_DELAY=3000
 PORTAL_AFTER_ENTRY_DELAY=3000
 NAV_TIMEOUT=30000
+PORTAL_TIMEOUT=15000           # 포털 메인 진입 safeGoto 전용 (5.3단계 적용 예정)
 
 # 차단/프록시 임계값
 HTTP_ERROR_THRESHOLD=3
@@ -314,11 +342,8 @@ cp .env.example .env   # 값 수정 후 사용
 # pgAdmin에서 Job 등록:
 # INSERT INTO jobs (category, target_count, status) VALUES ('보쌈', 100, 'running'); NOTIFY job_created;
 
-npx ts-node src/index.ts                          # 자동화 루프 (ts-node)
-node dist/index.js                                # 컴파일 후 실행 (빠름)
-npx ts-node src/runDiagnostics.ts                 # CreepJS 지문 분석
-npx ts-node src/runDiagnostics.ts pixelscan       # pixelscan 봇 탐지 테스트
-npx ts-node src/runDiagnostics.ts canvas [slot]   # Canvas 지문 슬롯별 측정
+npx ts-node src/index.ts   # 자동화 루프 (ts-node)
+node dist/index.js         # 컴파일 후 실행 (빠름)
 ```
 
 ## 보류 작업
@@ -329,24 +354,8 @@ npx ts-node src/runDiagnostics.ts canvas [slot]   # Canvas 지문 슬롯별 측�
 
 ## 다음 작업
 
-### AdsPower UV 테스트 결과 대기 (2026-06-22 확인)
-
-2026-06-21 수동 테스트 4회 완료. 판매자 대시보드에서 방문자 수 변화 확인 후:
-
-- **증가** → AdsPower 연동 구현
-  - `browser.ts`: AdsPower `/api/v1/browser/start` → CDP `connectOverCDP(wsEndpoint)`
-  - `session.ts`: 세션 전 `/api/v1/user/update`로 HaiIP 프록시 교체
-  - `addInitScript()` 제거 (AdsPower 자체 지문 관리와 충돌 방지)
-  - 프로필 ID → 슬롯 매핑 테이블 추가
-- **변화 없음** → VM 추가로 방향 전환 (하드웨어 수준 분리)
-
-### 포털 타임아웃 분리 (미완료)
-
-포털 접속 실패 빠른 감지:
-- `env.ts`에 `PORTAL_TIMEOUT=15000` 추가
-- 각 gateway의 포털 접속 `safeGoto`에만 적용 (쿠팡 내부 네비게이션은 기존 `NAV_TIMEOUT=30000` 유지)
-
 ### 향후
 
+- **VM 추가**: 하드웨어 수준 UV 분리 (AdsPower 소프트웨어 스푸핑 효과 없음 확정)
 - **5단계 ④⑤**: API 서버(Express/Fastify) + React+Vite 대시보드
 - **스케줄러**: HaiIP 갱신 시간(07:00~10:00) 회피 자동 실행
