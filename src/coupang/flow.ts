@@ -135,6 +135,7 @@ export async function runCoupangSearchFlow(
         await typeLikeHuman(page, 'input[name="q"]:visible', query);
       } else {
         await scrollToTop(page);
+        await assertNotBlocked(page);  // 재검색 전 차단 여부 확인
         await clearSearchInput(page);
         await typeLikeHuman(page, 'input[name="q"]:visible', query);
       }

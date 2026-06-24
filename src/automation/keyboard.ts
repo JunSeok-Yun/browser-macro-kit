@@ -18,10 +18,12 @@ export async function typeLikeHuman(page: Page, selector: string, text: string) 
 
 /** 검색창 내용을 전체 선택 후 삭제 */
 export async function clearSearchInput(page: Page) {
+  const input = await page.$('input[name="q"]:visible');
+  if (!input) return;
+  await input.click();
   await sleep(gaussianRandom(250, 50, 120, 450));
-  await sleep(Math.random() * 300 + 200);
+  await page.keyboard.press("Control+A");
   await sleep(gaussianRandom(75, 20, 30, 150));
-  await sleep(Math.random() * 100 + 50);
   await page.keyboard.press("Delete");
   await sleep(gaussianRandom(150, 40, 60, 300));
 }
