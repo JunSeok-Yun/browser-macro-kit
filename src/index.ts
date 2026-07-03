@@ -13,8 +13,8 @@ async function main() {
   console.log("[메인] 가동 시작...");
   console.log(`[메인] 영구 프로필 경로: ${ENV.USER_DATA_ROOT}`);
 
-  const proxyManager = await ProxyManager.create();
-  console.log(`[메인] 사용 가능한 프록시: ${proxyManager.count}개`);
+  // proxies.txt → proxy_pool 동기화 + 파일 감시 시작
+  await ProxyManager.create();
 
   let wake = () => {};
   const listenClient = await listenForJobCreated(() => wake());
@@ -49,7 +49,7 @@ async function main() {
         completed: job.completedCount, target: job.targetCount,
       });
 
-      const success = await runSession(proxyManager, target, job.id);
+      const success = await runSession(target, job.id);
 
       if (success) {
         const progress = await incrementJobProgress(job.id);

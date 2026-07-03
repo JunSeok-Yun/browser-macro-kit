@@ -20,14 +20,20 @@ export const ENV = {
   COUPANG_ENTRY_DELAY:      parseInt(process.env.COUPANG_ENTRY_DELAY ?? "4000", 10),
   COUPANG_SEARCH_DELAY:     parseInt(process.env.COUPANG_SEARCH_DELAY ?? "3000", 10),
   PORTAL_AFTER_ENTRY_DELAY: parseInt(process.env.PORTAL_AFTER_ENTRY_DELAY ?? "3000", 10),
-  NAV_TIMEOUT:     parseInt(process.env.NAV_TIMEOUT     ?? "30000", 10),
-  PORTAL_TIMEOUT:  parseInt(process.env.PORTAL_TIMEOUT  ?? "15000", 10),
+  NAV_TIMEOUT:              parseInt(process.env.NAV_TIMEOUT     ?? "30000", 10),
+  PORTAL_TIMEOUT:           parseInt(process.env.PORTAL_TIMEOUT  ?? "15000", 10),
+  PROXY_LOCK_STALE_MS:      parseInt(process.env.PROXY_LOCK_STALE_MS ?? "120000",10),
+  
+  // 차단/프록시 임계값
   HTTP_ERROR_THRESHOLD:     parseInt(process.env.HTTP_ERROR_THRESHOLD ?? "3", 10),
   PROXY_FAIL_THRESHOLD:     parseInt(process.env.PROXY_FAIL_THRESHOLD ?? "2", 10),
-  PROFILE_LOCK_STALE_MS:      parseInt(process.env.PROFILE_LOCK_STALE_MS ?? "600000", 10),
-  INCOGNITO_RATIO:            parseFloat(process.env.INCOGNITO_RATIO ?? "0"),
-  EDGE_RATIO:                 parseFloat(process.env.EDGE_RATIO ?? "0"),
-  PROFILE_RESET_THRESHOLD: parseInt(process.env.PROFILE_RESET_THRESHOLD ?? "20", 10),
+  
+  // 프로필
+  PROFILE_LOCK_STALE_MS:    parseInt(process.env.PROFILE_LOCK_STALE_MS ?? "600000", 10),
+  INCOGNITO_RATIO:          parseFloat(process.env.INCOGNITO_RATIO ?? "0"),
+  EDGE_RATIO:               parseFloat(process.env.EDGE_RATIO ?? "0"),
+  PROFILE_RESET_THRESHOLD:  parseInt(process.env.PROFILE_RESET_THRESHOLD ?? "20", 10),
+  
   ADD_TO_CART_RATIO:        parseFloat(process.env.ADD_TO_CART_RATIO ?? "0.2"),
-  LOG_BEACONS:       process.env.LOG_BEACONS === "true",
+  LOG_BEACONS:              process.env.LOG_BEACONS === "true",
 };

@@ -187,3 +187,75 @@ export async function checkAndResetSessionCount(slot: number, threshold: number)
   }
   return false;
 }
+
+// ─── proxy_pool DB 락 ──────────────────────────────────────────────────────
+
+/**
+ * proxies.txt 파싱 결과로 proxy_pool 전체 교체.
+ * 트랜잭션으로 DELETE + INSERT를 원자적으로 처리.
+ */
+export async function syncProxiesToDb(entries: ProxyEntry[]): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM proxy_pool");
+    if (entries.length > 0) {
+      const values = entries.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(", ");
+      const params = entries.flatMap(e => [e.host, e.port]);
+      await client.query(
+        `INSERT INTO proxy_pool (host, port) VALUES ${values}`,
+        params
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 사용 가능한 프록시를 원자적으로 점유.
+ * proxy_stats의 fail_count가 임계값 이상인 프록시는 제외.
+ * 없으면 null 반환.
+ */
+export async function acquireProxy(staleMs: number, failThreshold: number): Promise<ProxyEntry | null> {
+  const { rows } = await pool.query<{ host: string; port: number }>(
+    `UPDATE proxy_pool
+      SET in_use = true, locked_at = now()
+      WHERE (host, port) = (
+        SELECT pp.host, pp.port
+        FROM proxy_pool pp
+        LEFT JOIN proxy_stats ps ON pp.host = ps.host AND pp.port = ps.port
+        WHERE (pp.in_use = false OR pp.locked_at < now() - ($1::text || ' milliseconds')::interval)
+          AND COALESCE(ps.fail_count, 0) < $2
+        ORDER BY pp.last_used ASC NULLS FIRST
+        LIMIT 1
+        FOR UPDATE OF pp SKIP LOCKED
+      )
+      RETURNING host, port`,
+    [staleMs, failThreshold]
+  );
+  return rows[0] ?? null;
+}
+
+/** 프록시 정상 반납 — 순수 락 해제만 수행 */
+export async function releaseProxy(host: string, port: number): Promise<void> {
+  await pool.query(
+    `UPDATE proxy_pool SET in_use = false, last_used = now() WHERE host = $1 AND port = $2`,
+    [host, port]
+  );
+}
+
+/** 프록시 실패 처리 — 락 해제 + proxy_stats fail_count 증가 */
+export async function failProxy(host: string, port: number): Promise<void> {
+  await Promise.all([
+    pool.query(
+      `UPDATE proxy_pool SET in_use = false, last_used = now() WHERE host = $1 AND port = $2`,
+      [host, port]
+    ),
+    recordProxyResult({ host, port }, true),
+  ]);
+}
