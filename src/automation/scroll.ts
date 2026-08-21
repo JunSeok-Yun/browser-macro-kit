@@ -25,3 +25,40 @@ export async function scrollToTop(page: Page) {
   }
   await sleep(Math.random() * 400 + 200);
 }
+
+/**
+ * 상품 페이지를 끝까지 스크롤 (20~30초 소요).
+ * "상품정보 더보기" 클릭 후 늘어나는 페이지 높이에 대응하여
+ * 매 스텝마다 pageHeight를 재측정.
+ */
+export async function deepScrollToBottom(page: Page): Promise<void> {
+  for (let i = 0; i < 150; i++) { // 역방향 스텝 보정으로 120 → 150
+    const { scrollY, pageHeight, viewportHeight } = await page.evaluate(() => ({
+      scrollY: window.scrollY,
+      pageHeight: document.body.scrollHeight,
+      viewportHeight: window.innerHeight,
+    }));
+
+    if (scrollY + viewportHeight >= pageHeight - 300) break;
+
+    // 15% 확률로 위로 스크롤 (최상단 근처는 제외)
+    const goingUp = scrollY > 500 && Math.random() < 0.15;
+
+    // 위로 갈 땐 더 짧게 (100~250px) → 전체 방향은 아래로 수렴
+    const step = goingUp
+      ? Math.floor(Math.random() * 150) + 100
+      : Math.floor(Math.random() * 200) + 150;
+
+    await page.mouse.wheel(0, goingUp ? -step : step);
+
+    const r = Math.random();
+    if (r < 0.15) {
+      await sleep(Math.random() * 800 + 700);
+    } else if (r < 0.50) {
+      await sleep(Math.random() * 400 + 300);
+    } else {
+      await sleep(Math.random() * 150 + 100);
+    }
+  }
+}
+

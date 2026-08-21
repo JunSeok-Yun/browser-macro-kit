@@ -67,10 +67,6 @@ export async function getQueryFailCount(query: string): Promise<number> {
   return rows[0]?.fail_count ?? 0;
 }
 
-export async function resetProxyStats(): Promise<void> {
-  await pool.query(`DELETE FROM proxy_stats`);
-}
-
 // --- 신규: session_log (성공/실패 모두 기록, 상품별 통계용) ---
 
 export async function logSession(params: {
@@ -170,9 +166,96 @@ export async function acquireProfileSlot(staleMs: number): Promise<number | null
 }
 
 /** 슬롯 반납. last_used를 갱신해 라운드로빈 순서를 유지. */
-export async function releaseProfileSlot(slot: number): Promise<void> {
+export async function releaseProfileSlot(slot: number, incrementCount = true): Promise<void> {
   await pool.query(
-    `UPDATE profile_pool SET in_use = false, last_used = now() WHERE slot = $1`,
+    incrementCount
+      ? `UPDATE profile_pool SET in_use = false, last_used = now(), session_count = session_count + 1 WHERE slot = $1`
+      : `UPDATE profile_pool SET in_use = false, last_used = now() WHERE slot = $1`,
     [slot]
   );
+}
+
+/** 슬롯의 session_count를 읽어 임계값 초과 시 0으로 리셋 후 true 반환 */
+export async function checkAndResetSessionCount(slot: number, threshold: number): Promise<boolean> {
+  const { rows } = await pool.query<{ session_count: number }>(
+    `SELECT session_count FROM profile_pool WHERE slot = $1`, [slot]
+  );
+  const count = rows[0]?.session_count ?? 0;
+  if (count >= threshold) {
+    await pool.query(`UPDATE profile_pool SET session_count = 0 WHERE slot = $1`, [slot]);
+    return true;
+  }
+  return false;
+}
+
+// ─── proxy_pool DB 락 ──────────────────────────────────────────────────────
+
+/**
+ * proxies.txt 파싱 결과로 proxy_pool 전체 교체.
+ * 트랜잭션으로 DELETE + INSERT를 원자적으로 처리.
+ */
+export async function syncProxiesToDb(entries: ProxyEntry[]): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM proxy_pool");
+    if (entries.length > 0) {
+      const values = entries.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(", ");
+      const params = entries.flatMap(e => [e.host, e.port]);
+      await client.query(
+        `INSERT INTO proxy_pool (host, port) VALUES ${values}`,
+        params
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 사용 가능한 프록시를 원자적으로 점유.
+ * proxy_stats의 fail_count가 임계값 이상인 프록시는 제외.
+ * 없으면 null 반환.
+ */
+export async function acquireProxy(staleMs: number, failThreshold: number): Promise<ProxyEntry | null> {
+  const { rows } = await pool.query<{ host: string; port: number }>(
+    `UPDATE proxy_pool
+      SET in_use = true, locked_at = now()
+      WHERE (host, port) = (
+        SELECT pp.host, pp.port
+        FROM proxy_pool pp
+        LEFT JOIN proxy_stats ps ON pp.host = ps.host AND pp.port = ps.port
+        WHERE (pp.in_use = false OR pp.locked_at < now() - ($1::text || ' milliseconds')::interval)
+          AND COALESCE(ps.fail_count, 0) < $2
+        ORDER BY pp.last_used ASC NULLS FIRST
+        LIMIT 1
+        FOR UPDATE OF pp SKIP LOCKED
+      )
+      RETURNING host, port`,
+    [staleMs, failThreshold]
+  );
+  return rows[0] ?? null;
+}
+
+/** 프록시 정상 반납 — 순수 락 해제만 수행 */
+export async function releaseProxy(host: string, port: number): Promise<void> {
+  await pool.query(
+    `UPDATE proxy_pool SET in_use = false, last_used = now() WHERE host = $1 AND port = $2`,
+    [host, port]
+  );
+}
+
+/** 프록시 실패 처리 — 락 해제 + proxy_stats fail_count 증가 */
+export async function failProxy(host: string, port: number): Promise<void> {
+  await Promise.all([
+    pool.query(
+      `UPDATE proxy_pool SET in_use = false, last_used = now() WHERE host = $1 AND port = $2`,
+      [host, port]
+    ),
+    recordProxyResult({ host, port }, true),
+  ]);
 }

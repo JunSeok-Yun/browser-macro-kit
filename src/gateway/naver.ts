@@ -5,6 +5,7 @@ import { typeLikeHuman } from "../automation/keyboard";
 import { sleep } from "../utils";
 import { saveDebugHtml } from "../infra/debugCapture";
 import { NoLinkFoundError } from "../core/errors";
+import * as logger from "../infra/logger";
 
 const NAVER_COUPANG_SELECTOR = [
   'a.direct_link:not([href*="link.coupang.com"])',
@@ -18,7 +19,7 @@ export async function enterCoupangFromNaverResults(page: Page): Promise<void> {
   await coupangLink.waitFor({ state: "attached", timeout: 4000 }).catch(() => {});
 
   const elementCount = await coupangLink.count();
-  console.log(`[Gateway] 매칭된 링크 요소 개수: ${elementCount}개`);
+  logger.info(`[Gateway] 매칭된 링크 요소 개수: ${elementCount}개`);
 
   if (elementCount === 0) {
     const html = await page.content();
@@ -29,7 +30,7 @@ export async function enterCoupangFromNaverResults(page: Page): Promise<void> {
     );
   }
 
-console.log("[Gateway] 쿠팡으로 이동합니다...");
+  logger.info("[Gateway] 쿠팡으로 이동합니다...");
 // 네이버 브랜드검색 링크는 target="_blank" 가 붙어 있을 수 있음
 // → 클릭 전에 _self로 강제 변경해 새 탭 대신 현재 탭에서 이동하게 함
 await coupangLink.evaluate((el) => { (el as HTMLAnchorElement).target = "_self"; });
@@ -44,8 +45,8 @@ await withNavigationErrorHandling(() =>
 }
 
 export async function runNaverGateway(page: Page): Promise<Page> {
-  console.log("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
-  await safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.NAV_TIMEOUT });
+  logger.info("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
+  await safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
   await sleep(ENV.NAVER_ENTRY_DELAY);
 
   await typeLikeHuman(page, "#query", "쿠팡");
@@ -55,7 +56,7 @@ export async function runNaverGateway(page: Page): Promise<Page> {
   await sleep(ENV.NAVER_SEARCH_DELAY);
   await assertPortalNotBlocked(page, "naver");
 
-  console.log("[Gateway] 네이버 검색 결과에서 실제 이동 가능한 링크 요소를 탐색합니다.");
+  logger.info("[Gateway] 네이버 검색 결과에서 실제 이동 가능한 링크 요소를 탐색합니다.");
   await enterCoupangFromNaverResults(page);
 
   return page;
