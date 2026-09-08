@@ -6,6 +6,7 @@ import { sleep } from "../utils";
 import { saveDebugHtml } from "../infra/debugCapture";
 import { NoLinkFoundError } from "../core/errors";
 import * as logger from "../infra/logger";
+import * as stepTimer from "../infra/stepTimer";
 
 const GOOGLE_COUPANG_SELECTOR = [
   'a:has-text("쿠팡"):not([href*="link.coupang.com"])',
@@ -31,11 +32,14 @@ export async function enterCoupangFromGoogleResults(page: Page): Promise<void> {
 
   logger.info("[Gateway] 링크 클릭 후 쿠팡 로딩을 대기합니다...");
 
-  await withNavigationErrorHandling(() =>
-    Promise.all([
-      page.waitForURL((url) => !url.hostname.includes("google.com"), { timeout: ENV.NAV_TIMEOUT , waitUntil: "domcontentloaded"}),
-      googleResultLink.click(),
-    ])
+  await stepTimer.time("portal_to_coupang_nav", () =>
+    withNavigationErrorHandling(() =>
+      Promise.all([
+        page.waitForURL((url) => !url.hostname.includes("google.com"), { timeout: ENV.NAV_TIMEOUT , waitUntil: "domcontentloaded"}),
+        googleResultLink.click(),
+      ])
+    ),
+    { portal: "google" }
   );
 
   await sleep(ENV.COUPANG_ENTRY_DELAY);
@@ -44,7 +48,11 @@ export async function enterCoupangFromGoogleResults(page: Page): Promise<void> {
 export async function runGoogleGateway(page: Page): Promise<Page> {
   logger.info("[Gateway] 구글을 통해 쿠팡 진입을 시도합니다.");
 
-  await safeGoto(page, "https://www.google.com", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
+  await stepTimer.time(
+    "portal_home_goto",
+    () => safeGoto(page, "https://www.google.com", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT }),
+    { portal: "google" }
+  );
   await page.waitForTimeout(
     Math.floor(Math.random() * ENV.GOOGLE_ENTRY_DELAY_RANGE) + ENV.GOOGLE_ENTRY_DELAY_MIN
   );

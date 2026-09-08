@@ -11,6 +11,7 @@ import { BrowserContext } from "patchright";
 import { sleep } from "./utils";
 import * as logger from "./infra/logger";
 import { attachNetworkCapture } from "./infra/networkCapture";
+import * as stepTimer from "./infra/stepTimer";
 
 const SLOT_RETRY_DELAY_MS = 5000;
 let _firstSessionDone = false;
@@ -86,6 +87,7 @@ export async function runSession(
 
     try {
         for (let i = 1; i <= ENV.MAX_RETRY; i++) {
+            stepTimer.setContext(jobId, slot, i);
             logger.info(
                 `[메인] 시도 ${i}/${ENV.MAX_RETRY} — 프록시: ${proxy.host}:${proxy.port}, 프로필: profile-${slot}`,
                 { event: "SESSION_ATTEMPT", attempt: i, maxRetry: ENV.MAX_RETRY, proxy: `${proxy.host}:${proxy.port}`, slot }
@@ -162,6 +164,7 @@ export async function runSession(
                 }
             } finally {
                 flushNetworkLog();
+                await stepTimer.flush();
                 await context.close();
                 if (chromePid) { try { process.kill(chromePid); } catch {} }
                 if (tempDir) { try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {} }

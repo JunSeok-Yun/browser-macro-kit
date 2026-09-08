@@ -11,6 +11,7 @@ import { runCoupangSearchFlow } from "../coupang/flow";
 import { assertNotBlocked, assertPortalNotBlocked, safeGoto, PortalType } from "../core/blockDetection";
 import { ProxyEntry } from "../infra/proxyManager";
 import * as logger from "../infra/logger";
+import * as stepTimer from "../infra/stepTimer";
 
 const FALLBACK: Record<PortalType, PortalType> = {
   naver: "google",
@@ -49,7 +50,7 @@ export async function runPortalGateway(
   try {
     let targetPage: Page;
     try {
-      targetPage = await launchPortal(page, portal);
+      targetPage = await stepTimer.time("portal_gateway", () => launchPortal(page, portal), { portal, proxy });
     } catch (portalError) {
       if (portalError instanceof NoLinkFoundError) {
         const fallback = FALLBACK[portal];
@@ -61,7 +62,7 @@ export async function runPortalGateway(
           slot: logger.slotFrom(profileDir),
         });
         activePortal = fallback;
-        targetPage = await launchPortal(page, fallback);
+        targetPage = await stepTimer.time("portal_gateway", () => launchPortal(page, fallback), { portal: fallback, proxy });
       } else {
         throw portalError;
       }
@@ -143,7 +144,11 @@ export async function runPortalGateway(
         proxy: proxy ? `${proxy.host}:${proxy.port}` : null,
         slot: logger.slotFrom(profileDir),
       });
-      await runCoupangSearchFlow(targetPage, target, excludeQueries, proxy, profileDir, jobId);
+      await stepTimer.time(
+        "coupang_flow",
+        () => runCoupangSearchFlow(targetPage, target, excludeQueries, proxy, profileDir, jobId),
+        { portal: activePortal, proxy }
+      );
       return true;
     } else {
       logger.warn(`[Fail] 다른 페이지로 이탈됨: ${currentUrl}`, {

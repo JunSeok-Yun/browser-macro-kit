@@ -6,6 +6,7 @@ import { sleep } from "../utils";
 import { saveDebugHtml } from "../infra/debugCapture";
 import * as logger from "../infra/logger";
 import { BlockDetectedError, NoLinkFoundError } from "../core/errors";
+import * as stepTimer from "../infra/stepTimer";
 
 const DAUM_COUPANG_SELECTOR = 'a[href*=".coupang.com"]:not([href*="link.coupang.com"])';
 
@@ -44,17 +45,19 @@ export async function enterCoupangFromDaumResults(page: Page): Promise<Page> {
 
     let coupangPage: Page;
     try {
-        const raceResult = await Promise.race([
-            sameTabNavPromise.then(() => null as Page | null),
-            newPageEventPromise.then(p => p as Page | null),
-        ]);
-        if (raceResult === null) {
-            coupangPage = page; // 같은 탭에서 이동
-        } else {
-            coupangPage = raceResult; // 새 탭에서 열림
-            await coupangPage.waitForLoadState("domcontentloaded");
-            await page.close().catch(() => {}); // 검색 결과 탭 닫기
-        }
+        coupangPage = await stepTimer.time("portal_to_coupang_nav", async () => {
+            const raceResult = await Promise.race([
+                sameTabNavPromise.then(() => null as Page | null),
+                newPageEventPromise.then(p => p as Page | null),
+            ]);
+            if (raceResult === null) {
+                return page; // 같은 탭에서 이동
+            } else {
+                await raceResult.waitForLoadState("domcontentloaded");
+                await page.close().catch(() => {}); // 검색 결과 탭 닫기
+                return raceResult; // 새 탭에서 열림
+            }
+        }, { portal: "daum" });
     } catch (error) {
         const type = classifyNavigationError(error);
         if (type) throw new BlockDetectedError(`${type}: ${(error as Error).message}`, type);
@@ -67,7 +70,11 @@ export async function enterCoupangFromDaumResults(page: Page): Promise<Page> {
 
 export async function runDaumGateway(page: Page): Promise<Page> {
     logger.info("[Gateway] 다음을 통해 쿠팡 진입을 시도합니다.");
-    await safeGoto(page, "https://www.daum.net", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
+    await stepTimer.time(
+        "portal_home_goto",
+        () => safeGoto(page, "https://www.daum.net", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT }),
+        { portal: "daum" }
+    );
     await sleep(ENV.GOOGLE_ENTRY_DELAY_MIN + Math.floor(Math.random() * ENV.GOOGLE_ENTRY_DELAY_RANGE));
     await typeLikeHuman(page, 'input[name="q"]', "쿠팡");
     await page.keyboard.press("Enter");

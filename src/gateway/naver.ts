@@ -6,6 +6,7 @@ import { sleep } from "../utils";
 import { saveDebugHtml } from "../infra/debugCapture";
 import { NoLinkFoundError } from "../core/errors";
 import * as logger from "../infra/logger";
+import * as stepTimer from "../infra/stepTimer";
 
 const NAVER_COUPANG_SELECTOR = [
   'a.direct_link:not([href*="link.coupang.com"])',
@@ -34,11 +35,14 @@ export async function enterCoupangFromNaverResults(page: Page): Promise<void> {
 // 네이버 브랜드검색 링크는 target="_blank" 가 붙어 있을 수 있음
 // → 클릭 전에 _self로 강제 변경해 새 탭 대신 현재 탭에서 이동하게 함
 await coupangLink.evaluate((el) => { (el as HTMLAnchorElement).target = "_self"; });
-await withNavigationErrorHandling(() =>
-  Promise.all([
-    page.waitForURL((url) => url.hostname.includes("coupang.com"), { timeout: ENV.NAV_TIMEOUT, waitUntil: "domcontentloaded" }),
-    coupangLink.click(),
-  ])
+await stepTimer.time("portal_to_coupang_nav", () =>
+  withNavigationErrorHandling(() =>
+    Promise.all([
+      page.waitForURL((url) => url.hostname.includes("coupang.com"), { timeout: ENV.NAV_TIMEOUT, waitUntil: "domcontentloaded" }),
+      coupangLink.click(),
+    ])
+  ),
+  { portal: "naver" }
 );
 
   await sleep(ENV.COUPANG_ENTRY_DELAY);
@@ -46,7 +50,11 @@ await withNavigationErrorHandling(() =>
 
 export async function runNaverGateway(page: Page): Promise<Page> {
   logger.info("[Gateway] 네이버를 통해 쿠팡 진입을 시도합니다.");
-  await safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT });
+  await stepTimer.time(
+    "portal_home_goto",
+    () => safeGoto(page, "https://www.naver.com", { waitUntil: "domcontentloaded", timeout: ENV.PORTAL_TIMEOUT }),
+    { portal: "naver" }
+  );
   await sleep(ENV.NAVER_ENTRY_DELAY);
 
   await typeLikeHuman(page, "#query", "쿠팡");

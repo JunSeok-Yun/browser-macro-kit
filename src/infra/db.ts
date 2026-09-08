@@ -259,3 +259,37 @@ export async function failProxy(host: string, port: number): Promise<void> {
     recordProxyResult({ host, port }, true),
   ]);
 }
+
+// ─── 구간별 소요시간 계측 ──────────────────────────────────────────────────
+
+export interface StepTimingRow {
+  jobId: number | null;
+  slot: number | null;
+  attempt: number | null;
+  step: string;
+  portal: string | null;
+  proxyHost: string | null;
+  proxyPort: number | null;
+  durationMs: number;
+  success: boolean;
+}
+
+/** 세션 1회 시도분 계측 기록을 한 번에 bulk insert */
+export async function logStepTimings(rows: StepTimingRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const cols = 9;
+  const values = rows
+    .map((_, i) => {
+      const base = i * cols;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
+    })
+    .join(", ");
+  const params = rows.flatMap((r) => [
+    r.jobId, r.slot, r.attempt, r.step, r.portal, r.proxyHost, r.proxyPort, r.durationMs, r.success,
+  ]);
+  await pool.query(
+    `INSERT INTO step_timing (job_id, slot, attempt, step, portal, proxy_host, proxy_port, duration_ms, success)
+      VALUES ${values}`,
+    params
+  );
+}
